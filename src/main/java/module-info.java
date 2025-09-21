@@ -5,4 +5,6 @@ module org.com.webbrowser {
 
     opens org.com.webbrowser to javafx.fxml;
     exports org.com.webbrowser;
+    exports org.com.webbrowser.controller;
+    opens org.com.webbrowser.controller to javafx.fxml;
 }
