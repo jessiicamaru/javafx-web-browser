@@ -1,17 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<?import javafx.scene.control.Button?>
-<?import javafx.scene.control.TextField?>
-<?import javafx.scene.control.TextArea?>
-<?import javafx.scene.layout.VBox?>
-<?import javafx.geometry.Insets?>
 
-<VBox xmlns="http://javafx.com/javafx/25" xmlns:fx="http://javafx.com/fxml"
-      fx:controller="org.com.webbrowser.controller.WebBrowserTcpController"
-      spacing="10" alignment="TOP_CENTER">
-    <padding>
-        <Insets top="10" right="10" bottom="10" left="10"/>
-    </padding>
-    <TextField fx:id="urlField" promptText="Enter URL" prefWidth="600"/>
-    <Button fx:id="goButton" text="Go"/>
-    <TextArea fx:id="displayArea" prefWidth="600" prefHeight="400" wrapText="true"/>
-</VBox>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+
+<BorderPane xmlns="http://javafx.com/javafx"
+            xmlns:fx="http://javafx.com/fxml"
+            fx:controller="org.com.webbrowser.controller.WebBrowserTcpController">
+
+    <top>
+        <ToolBar>
+            <Button fx:id="backButton" text="⟵"/>
+            <Button fx:id="forwardButton" text="⟶"/>
+            <TextField fx:id="urlField" promptText="Enter URL..." HBox.hgrow="ALWAYS"/>
+            <Button fx:id="goButton" text="Go"/>
+            <Button fx:id="addTabButton" text="+"/>
+        </ToolBar>
+    </top>
+
+    <center>
+        <TabPane fx:id="tabPane" tabClosingPolicy="ALL_TABS"/>
+    </center>
+</BorderPane>
