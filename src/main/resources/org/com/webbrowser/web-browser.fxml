@@ -8,13 +8,19 @@
             fx:controller="org.com.webbrowser.controller.WebBrowserTcpController">
 
     <top>
-        <ToolBar>
-            <Button fx:id="backButton" text="⟵"/>
-            <Button fx:id="forwardButton" text="⟶"/>
-            <TextField fx:id="urlField" promptText="Enter URL..." HBox.hgrow="ALWAYS"/>
-            <Button fx:id="goButton" text="Go"/>
-            <Button fx:id="addTabButton" text="+"/>
-        </ToolBar>
+        <VBox>
+            <ToolBar>
+                <Button fx:id="backButton" text="⟵"/>
+                <Button fx:id="forwardButton" text="⟶"/>
+                <TextField fx:id="urlField" promptText="Enter URL..." HBox.hgrow="ALWAYS"/>
+                <Button fx:id="bookmarkButton" text="⭐"/>
+                <Button fx:id="goButton" text="Go"/>
+                <Button fx:id="addTabButton" text="+"/>
+            </ToolBar>
+
+            <ToolBar fx:id="bookmarkBar" minHeight="35">
+            </ToolBar>
+        </VBox>
     </top>
 
     <center>

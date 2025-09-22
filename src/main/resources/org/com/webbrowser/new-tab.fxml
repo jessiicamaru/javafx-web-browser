@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.scene.layout.*?>
+<?import javafx.scene.control.*?>
+<?import javafx.geometry.Insets?>
+
+<BorderPane xmlns:fx="http://javafx.com/fxml">
+    <center>
+        <VBox alignment="CENTER" spacing="20" maxWidth="500">
+            <Label text="My JavaFX Browser" style="-fx-font-size: 24px; -fx-font-weight: bold;"/>
+            <TextField fx:id="searchField" promptText="Tìm kiếm Google hoặc nhập URL..."
+                       style="-fx-font-size: 14px; -fx-pref-width: 400px;"/>
+            <HBox spacing="15" alignment="CENTER">
+                <Button text="Facebook"/>
+                <Button text="YouTube"/>
+                <Button text="Google"/>
+                <Button text="GitHub"/>
+            </HBox>
+        </VBox>
+    </center>
+</BorderPane>
