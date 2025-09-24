@@ -2,6 +2,7 @@ package org.com.webbrowser.tcp;
 
 import java.io.*;
 import java.net.Socket;
+import java.net.URL;
 import java.util.*;
 
 public class HttpClient {
@@ -11,10 +12,12 @@ public class HttpClient {
              PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
              BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
 
-            out.print("GET " + path + " HTTP/1.1\r\n");
-            out.print("Host: " + host + "\r\n");
-            out.print("Connection: close\r\n");
-            out.print("\r\n");
+            out.write("GET " + path + " HTTP/1.1\r\n");
+            out.write("Host: " + host + "\r\n");
+            out.write("User-Agent: MyJavaHttpClient/1.0\r\n");
+            out.write("Accept: text/html\r\n");
+            out.write("Connection: close\r\n");
+            out.write("\r\n");
             out.flush();
 
             String statusLine = in.readLine();
@@ -42,5 +45,4 @@ public class HttpClient {
             return new HttpResponse(statusLine, headers, bodyBuilder.toString());
         }
     }
-
 }
