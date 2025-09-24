@@ -2,7 +2,6 @@ package org.com.webbrowser.tcp;
 
 import java.io.*;
 import java.net.Socket;
-import java.net.URL;
 import java.util.*;
 
 public class HttpClient {

@@ -49,19 +49,19 @@ public class WebBrowserTcpController implements Initializable {
     public void initialize(URL location, ResourceBundle resources) {
         addNewTab("newtab");
 
-        goButton.setOnAction(e -> loadUrl(getCurrentTab(), urlField.getText(), true));
-        urlField.setOnAction(e -> loadUrl(getCurrentTab(), urlField.getText(), true));
-        addTabButton.setOnAction(e -> addNewTab("newtab"));
-        backButton.setOnAction(e -> goBack());
-        forwardButton.setOnAction(e -> goForward());
+        goButton.setOnAction(_ -> loadUrl(getCurrentTab(), urlField.getText(), true));
+        urlField.setOnAction(_ -> loadUrl(getCurrentTab(), urlField.getText(), true));
+        addTabButton.setOnAction(_ -> addNewTab("newtab"));
+        backButton.setOnAction(_ -> goBack());
+        forwardButton.setOnAction(_ -> goForward());
 
-        tabPane.getTabs().addListener((javafx.collections.ListChangeListener<Tab>) change -> {
+        tabPane.getTabs().addListener((javafx.collections.ListChangeListener<Tab>) _ -> {
             if (tabPane.getTabs().isEmpty()) {
                 Platform.exit();
             }
         });
 
-        tabPane.getSelectionModel().selectedItemProperty().addListener((obs, oldTab, newTab) -> {
+        tabPane.getSelectionModel().selectedItemProperty().addListener((_, _, newTab) -> {
             if (newTab == null) {
                 urlField.clear();
             } else {
@@ -75,7 +75,7 @@ public class WebBrowserTcpController implements Initializable {
         });
 
 
-        bookmarkButton.setOnAction(e -> {
+        bookmarkButton.setOnAction(_ -> {
             String currentUrl = urlField.getText();
             if (currentUrl == null || currentUrl.isEmpty()) return;
 
@@ -98,12 +98,12 @@ public class WebBrowserTcpController implements Initializable {
 
     private void addBookmarkButton(String name, String url) {
         Button bmButton = new Button(name);
-        bmButton.setOnAction(ev -> loadUrl(getCurrentTab(), url, true));
+        bmButton.setOnAction(_ -> loadUrl(getCurrentTab(), url, true));
 
         ContextMenu menu = new ContextMenu();
 
         MenuItem editItem = new MenuItem("Edit");
-        editItem.setOnAction(e -> {
+        editItem.setOnAction(_ -> {
             TextInputDialog nameDialog = new TextInputDialog(name);
             nameDialog.setTitle("Edit Bookmark");
             nameDialog.setHeaderText("Edit bookmark name");
@@ -122,13 +122,13 @@ public class WebBrowserTcpController implements Initializable {
                     bookmarks.put(updatedName, updatedUrl);
 
                     bmButton.setText(updatedName);
-                    bmButton.setOnAction(ev -> loadUrl(getCurrentTab(), updatedUrl, true));
+                    bmButton.setOnAction(_ -> loadUrl(getCurrentTab(), updatedUrl, true));
                 });
             });
         });
 
         MenuItem deleteItem = new MenuItem("Delete");
-        deleteItem.setOnAction(e -> {
+        deleteItem.setOnAction(_ -> {
             bookmarks.remove(name);
             bookmarkBar.getItems().remove(bmButton);
         });
@@ -154,7 +154,7 @@ public class WebBrowserTcpController implements Initializable {
                 tab.setContent(newTabRoot);
 
                 TextField searchField = (TextField) newTabRoot.lookup("#searchField");
-                searchField.setOnAction(e -> {
+                searchField.setOnAction(_ -> {
                     String input = searchField.getText();
                     loadUrl(tab, input, true);
                 });
@@ -230,7 +230,7 @@ public class WebBrowserTcpController implements Initializable {
                 return h1;
             case "a":
                 Hyperlink link = new Hyperlink(el.text());
-                link.setOnAction(e -> loadUrl(getCurrentTab(), el.attr("href"), true));
+                link.setOnAction(_ -> loadUrl(getCurrentTab(), el.attr("href"), true));
                 return link;
             case "img":
                 try {
