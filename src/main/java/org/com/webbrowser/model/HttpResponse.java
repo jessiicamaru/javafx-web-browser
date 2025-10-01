@@ -1,4 +1,4 @@
-package org.com.webbrowser.tcp;
+package org.com.webbrowser.model;
 
 import java.util.Map;
 
