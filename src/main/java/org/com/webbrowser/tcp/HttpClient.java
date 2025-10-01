@@ -1,5 +1,7 @@
 package org.com.webbrowser.tcp;
 
+import org.com.webbrowser.model.HttpResponse;
+
 import java.io.*;
 import java.net.Socket;
 import java.util.*;

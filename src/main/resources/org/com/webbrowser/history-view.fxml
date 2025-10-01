@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+<?import javafx.geometry.Insets?>
+
+<VBox xmlns:fx="http://javafx.com/fxml"
+      fx:controller="org.com.webbrowser.controller.HistoryController"
+      spacing="10" padding="12">
+
+    <HBox fx:id="selectionBar" spacing="10" alignment="CENTER_LEFT" visible="false">
+        <Label fx:id="selectedCount" text="0 selected"/>
+        <Button fx:id="openSelectedBtn" text="Open"/>
+        <Button fx:id="deleteSelectedBtn" text="Delete"/>
+    </HBox>
+
+    <ListView fx:id="historyList" VBox.vgrow="ALWAYS"/>
+</VBox>

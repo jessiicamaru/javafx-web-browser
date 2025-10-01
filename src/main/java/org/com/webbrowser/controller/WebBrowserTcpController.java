@@ -6,9 +6,12 @@ import javafx.fxml.FXMLLoader;
 import javafx.fxml.Initializable;
 import javafx.scene.Parent;
 import javafx.scene.control.*;
+import javafx.scene.control.cell.CheckBoxTableCell;
+import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import org.com.webbrowser.WebBrowserApplication;
 import org.com.webbrowser.mapper.StyleMapper;
+import org.com.webbrowser.model.HistoryEntry;
 import org.com.webbrowser.tcp.HttpClient;
 
 import org.com.webbrowser.utils.CssSanitizer;
@@ -23,11 +26,15 @@ import javafx.scene.image.ImageView;
 
 import java.io.IOException;
 import java.net.URL;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.time.LocalDateTime;
 import java.util.*;
+import java.util.stream.Collectors;
 
 import static org.com.webbrowser.utils.CssLoader.extractCssLinksAndStyles;
+
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
+import javafx.geometry.Insets;
 
 public class WebBrowserTcpController implements Initializable {
     @FXML
@@ -50,6 +57,8 @@ public class WebBrowserTcpController implements Initializable {
     private final Map<String, String> bookmarks = new HashMap<>();
     private final Map<Tab, List<String>> history = new HashMap<>();
     private final Map<Tab, Integer> historyIndex = new HashMap<>();
+
+    private final ObservableList<HistoryEntry> globalHistory = FXCollections.observableArrayList();
 
     @Override
     public void initialize(URL location, ResourceBundle resources) {
@@ -77,6 +86,17 @@ public class WebBrowserTcpController implements Initializable {
                 } else {
                     urlField.clear();
                 }
+            }
+        });
+
+        tabPane.sceneProperty().addListener((obs, oldScene, newScene) -> {
+            if (newScene != null) {
+                newScene.addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, event -> {
+                    if (event.isControlDown() && event.getCode() == javafx.scene.input.KeyCode.H) {
+                        openHistoryWindow();
+                        event.consume();
+                    }
+                });
             }
         });
 
@@ -219,6 +239,11 @@ public class WebBrowserTcpController implements Initializable {
                     tab.setContent(pageScroll);
                     tab.setText(host);
                     urlField.setText(url);
+
+                    String title = Jsoup.parse(html).title();
+                    String visitedAt = LocalDateTime.now().toString();
+                    globalHistory.add(new HistoryEntry(title, url, visitedAt));
+
                     updateHistory(tab, url, addToHistory);
                 });
 
@@ -325,7 +350,6 @@ public class WebBrowserTcpController implements Initializable {
             }
         }
 
-        // ✅ Gắn id và class từ HTML
         try {
             if (el.hasAttr("id") && node != null) {
                 node.setId(el.attr("id"));
@@ -344,7 +368,9 @@ public class WebBrowserTcpController implements Initializable {
         if (node != null) {
             String style = StyleMapper.STYLES.get(tag);
             if (style != null) {
-                node.setStyle(style);
+                String prev = node.getStyle();
+                if (prev == null || prev.isEmpty()) node.setStyle(style);
+                else node.setStyle(prev + "; " + style);
             }
         }
 
@@ -353,18 +379,23 @@ public class WebBrowserTcpController implements Initializable {
 
 
     private void updateHistory(Tab tab, String url, boolean addToHistory) {
-        if (!addToHistory) return;
+        if (!addToHistory || tab == null) return;
+
+        history.putIfAbsent(tab, new ArrayList<>());
+        historyIndex.putIfAbsent(tab, -1);
+
         List<String> urls = history.get(tab);
         int idx = historyIndex.get(tab);
 
         if (idx < urls.size() - 1) {
-            urls = urls.subList(0, idx + 1);
-            history.put(tab, new ArrayList<>(urls));
+            urls = new ArrayList<>(urls.subList(0, idx + 1));
+            history.put(tab, urls);
         }
 
         urls.add(url);
         historyIndex.put(tab, urls.size() - 1);
     }
+
 
     private Tab getCurrentTab() {
         return tabPane.getSelectionModel().getSelectedItem();
@@ -405,6 +436,79 @@ public class WebBrowserTcpController implements Initializable {
         } else {
             return "https://" + input;
         }
+    }
+
+    private void openHistoryWindow() {
+        Tab historyTab = new Tab("History");
+
+        history.putIfAbsent(historyTab, new ArrayList<>());
+        historyIndex.putIfAbsent(historyTab, -1);
+
+        TableView<HistoryEntry> table = new TableView<>();
+        table.setEditable(true);
+
+        TableColumn<HistoryEntry, Boolean> selectCol = new TableColumn<>("Select");
+        selectCol.setCellValueFactory(cellData -> cellData.getValue().selectedProperty());
+        selectCol.setCellFactory(CheckBoxTableCell.forTableColumn(selectCol));
+        selectCol.setEditable(true);
+        selectCol.setPrefWidth(80);
+
+        TableColumn<HistoryEntry, String> timeCol = new TableColumn<>("Visited At");
+        timeCol.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(data.getValue().getDate()));
+        timeCol.setPrefWidth(220);
+
+        TableColumn<HistoryEntry, String> titleCol = new TableColumn<>("Title");
+        titleCol.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(data.getValue().getTitle()));
+        titleCol.setPrefWidth(360);
+
+        TableColumn<HistoryEntry, String> urlCol = new TableColumn<>("URL");
+        urlCol.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(data.getValue().getUrl()));
+        urlCol.setPrefWidth(360);
+
+        table.getColumns().addAll(selectCol, timeCol, titleCol, urlCol);
+
+        table.setItems(globalHistory);
+
+        table.setRowFactory(tv -> {
+            TableRow<HistoryEntry> row = new TableRow<>();
+            row.setOnMouseClicked(e -> {
+                if (e.getClickCount() == 2 && !row.isEmpty()) {
+                    HistoryEntry entry = row.getItem();
+                    addNewTab(entry.getUrl());   // mở ở tab mới
+                }
+            });
+            return row;
+        });
+
+        Button bookmarkBtn = new Button("Add to Bookmarks");
+        bookmarkBtn.setOnAction(_ev -> {
+            List<HistoryEntry> checked = globalHistory.stream()
+                    .filter(h -> h.selectedProperty().get())
+                    .collect(Collectors.toList());
+            for (HistoryEntry entry : checked) {
+                String name = (entry.getTitle() != null && !entry.getTitle().isEmpty()) ? entry.getTitle() : entry.getUrl();
+                addBookmarkButton(name, entry.getUrl());
+                entry.selectedProperty().set(false);
+            }
+        });
+
+        Button deleteBtn = new Button("Delete Selected");
+        deleteBtn.setOnAction(_ev -> {
+            List<HistoryEntry> toDelete = globalHistory.stream()
+                    .filter(h -> h.selectedProperty().get())
+                    .collect(Collectors.toList());
+            globalHistory.removeAll(toDelete);
+        });
+
+        HBox actionBar = new HBox(10, bookmarkBtn, deleteBtn);
+        actionBar.setPadding(new Insets(10));
+
+        VBox layout = new VBox(10, table, actionBar);
+        layout.setPadding(new Insets(10));
+
+        historyTab.setContent(layout);
+        tabPane.getTabs().add(historyTab);
+        tabPane.getSelectionModel().select(historyTab);
     }
 
 }

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+<?import javafx.geometry.Insets?>
+
+<HBox xmlns:fx="http://javafx.com/fxml"
+      fx:controller="org.com.webbrowser.controller.HistoryItemController"
+      spacing="10" alignment="CENTER_LEFT" padding="6">
+
+    <CheckBox fx:id="selectBox"/>
+
+    <VBox spacing="2">
+        <Label fx:id="titleLabel" style="-fx-font-weight: bold;"/>
+        <Hyperlink fx:id="urlLink"/>
+        <Label fx:id="dateLabel" style="-fx-font-size: 11px; -fx-text-fill: gray;"/>
+    </VBox>
+
+    <Pane HBox.hgrow="ALWAYS"/>
+
+    <Button fx:id="bookmarkBtn" text="★" style="-fx-font-size: 16px;"/>
+</HBox>
