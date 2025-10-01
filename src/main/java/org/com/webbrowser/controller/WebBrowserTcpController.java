@@ -8,8 +8,10 @@ import javafx.scene.Parent;
 import javafx.scene.control.*;
 import javafx.scene.layout.VBox;
 import org.com.webbrowser.WebBrowserApplication;
+import org.com.webbrowser.mapper.StyleMapper;
 import org.com.webbrowser.tcp.HttpClient;
 
+import org.com.webbrowser.utils.CssSanitizer;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -21,7 +23,11 @@ import javafx.scene.image.ImageView;
 
 import java.io.IOException;
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
+
+import static org.com.webbrowser.utils.CssLoader.extractCssLinksAndStyles;
 
 public class WebBrowserTcpController implements Initializable {
     @FXML
@@ -170,6 +176,16 @@ public class WebBrowserTcpController implements Initializable {
     private void loadUrl(Tab tab, String input, boolean addToHistory) {
         if (tab == null || input == null || input.isEmpty()) return;
 
+        ProgressIndicator loader = new ProgressIndicator();
+        loader.setPrefSize(80, 80);
+        VBox loadingBox = new VBox(loader, new Label("Loading..."));
+        loadingBox.setSpacing(10);
+        loadingBox.setAlignment(javafx.geometry.Pos.CENTER);
+
+        ScrollPane scroll = new ScrollPane(loadingBox);
+        scroll.setFitToWidth(true);
+        tab.setContent(scroll);
+
         new Thread(() -> {
             try {
                 String url = normalizeUrl(input);
@@ -188,9 +204,19 @@ public class WebBrowserTcpController implements Initializable {
                 String html = response.getBody();
 
                 Platform.runLater(() -> {
-                    Node rendered = renderHtml(html);
-                    ScrollPane scroll = new ScrollPane(rendered);
-                    tab.setContent(scroll);
+                    Node rendered = renderHtml(html, url);
+
+                    List<String> stylesheets = extractCssLinksAndStyles(html, url);
+                    if (rendered instanceof Parent) {
+                        Parent root = (Parent) rendered;
+                        for (String css : stylesheets) {
+                            root.getStylesheets().add(css);
+                        }
+                    }
+
+                    ScrollPane pageScroll = new ScrollPane(rendered);
+                    pageScroll.setFitToWidth(true);
+                    tab.setContent(pageScroll);
                     tab.setText(host);
                     urlField.setText(url);
                     updateHistory(tab, url, addToHistory);
@@ -207,49 +233,124 @@ public class WebBrowserTcpController implements Initializable {
         }).start();
     }
 
-
-    private Node renderHtml(String html) {
-        Document doc = Jsoup.parse(html);
+    private Node renderHtml(String html, String baseUri) {
+        Document doc = Jsoup.parse(html, baseUri);
         Element body = doc.body();
         return renderElement(body);
     }
 
+
     private Node renderElement(Element el) {
-        switch (el.tagName()) {
-            case "div":
+        String tag = el.tagName().toLowerCase(Locale.ROOT);
+        Node node;
+
+        switch (tag) {
+            case "div": {
                 VBox vbox = new VBox();
+                vbox.setSpacing(4);
                 for (Element child : el.children()) {
                     vbox.getChildren().add(renderElement(child));
                 }
-                return vbox;
-            case "p":
-                return new Label(el.text());
-            case "h1":
+                node = vbox;
+                break;
+            }
+            case "p": {
+                Label p = new Label(el.text());
+                p.setWrapText(true);
+                node = p;
+                break;
+            }
+            case "h1": {
                 Label h1 = new Label(el.text());
-                h1.setStyle("-fx-font-size: 24px; -fx-font-weight: bold;");
-                return h1;
-            case "a":
-                Hyperlink link = new Hyperlink(el.text());
-                link.setOnAction(_ -> loadUrl(getCurrentTab(), el.attr("href"), true));
-                return link;
-            case "img":
+                h1.setWrapText(true);
+                node = h1;
+                break;
+            }
+            case "h2": {
+                Label h2 = new Label(el.text());
+                h2.setWrapText(true);
+                node = h2;
+                break;
+            }
+            case "h3": {
+                Label h3 = new Label(el.text());
+                h3.setWrapText(true);
+                node = h3;
+                break;
+            }
+            case "a": {
+                String href = el.attr("abs:href");
+                if (href == null || href.isEmpty()) href = el.attr("href");
+                Hyperlink link = new Hyperlink(el.text().isEmpty() ? href : el.text());
+                String finalHref = href;
+                link.setOnAction(ev -> {
+                    if (finalHref != null && !finalHref.isEmpty()) {
+                        loadUrl(getCurrentTab(), finalHref, true);
+                    }
+                });
+                node = link;
+                break;
+            }
+            case "img": {
+                String src = el.attr("abs:src");
+                if (src == null || src.isEmpty()) src = el.attr("src");
                 try {
-                    Image img = new Image(el.attr("src"), true);
-                    return new ImageView(img);
+                    Image img = new Image(src, true);
+                    ImageView iv = new ImageView(img);
+                    iv.setPreserveRatio(true);
+                    iv.setFitWidth(600);
+                    node = iv;
                 } catch (Exception ex) {
-                    return new Label("[Image failed]");
+                    node = new Label("[Image failed]");
                 }
-            default:
+                break;
+            }
+            case "br": {
+                node = new Label("");
+                break;
+            }
+            default: {
                 VBox container = new VBox();
+                container.setSpacing(3);
                 for (Element child : el.children()) {
                     container.getChildren().add(renderElement(child));
                 }
-                if (!el.ownText().isEmpty()) {
-                    container.getChildren().add(new Label(el.ownText()));
+                String ownText = el.ownText() != null ? el.ownText().trim() : "";
+                if (!ownText.isEmpty()) {
+                    Label txt = new Label(ownText);
+                    txt.setWrapText(true);
+                    container.getChildren().add(txt);
                 }
-                return container;
+                node = container;
+            }
         }
+
+        // ✅ Gắn id và class từ HTML
+        try {
+            if (el.hasAttr("id") && node != null) {
+                node.setId(el.attr("id"));
+            }
+            if (!el.classNames().isEmpty() && node != null) {
+                node.getStyleClass().addAll(el.classNames());
+            }
+            if (el.hasAttr("style")) {
+                String inlineCss = el.attr("style");
+                String cleaned = CssSanitizer.clean(inlineCss);
+                node.setStyle(cleaned);
+            }
+        } catch (Exception ignored) {
+        }
+
+        if (node != null) {
+            String style = StyleMapper.STYLES.get(tag);
+            if (style != null) {
+                node.setStyle(style);
+            }
+        }
+
+        return node;
     }
+
 
     private void updateHistory(Tab tab, String url, boolean addToHistory) {
         if (!addToHistory) return;
