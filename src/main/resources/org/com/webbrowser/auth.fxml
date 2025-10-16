@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+<?import javafx.scene.text.*?>
+
+<AnchorPane xmlns="http://javafx.com/javafx"
+            xmlns:fx="http://javafx.com/fxml"
+            fx:controller="org.com.webbrowser.controller.AuthController"
+            prefWidth="400" prefHeight="450"
+            fx:id="container"
+>
+
+    <VBox spacing="15" alignment="CENTER" AnchorPane.leftAnchor="0" AnchorPane.rightAnchor="0"
+          AnchorPane.topAnchor="30">
+        <Text text="Welcome to Web Browser" />
+
+        <TextField fx:id="usernameField" promptText="Username" maxWidth="250"/>
+        <PasswordField fx:id="passwordField" promptText="Password" maxWidth="250"/>
+
+        <HBox spacing="10" alignment="CENTER">
+            <Button fx:id="loginButton" text="Login"/>
+            <Button fx:id="registerButton" text="Register"/>
+        </HBox>
+
+        <Label fx:id="messageLabel" textFill="white" wrapText="true" textAlignment="CENTER" maxWidth="250"/>
+    </VBox>
+
+</AnchorPane>
