@@ -1,5 +1,7 @@
 package org.com.webbrowser.controller;
 
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 import javafx.event.ActionEvent;
 import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
@@ -8,9 +10,14 @@ import javafx.scene.control.*;
 import javafx.scene.layout.AnchorPane;
 import javafx.stage.Stage;
 import org.com.webbrowser.WebBrowserApplication;
+import org.com.webbrowser.model.ApiResponse;
+import org.com.webbrowser.model.User;
+import org.com.webbrowser.session.UserSession;
 import org.com.webbrowser.utils.Toast;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.io.OutputStream;
@@ -43,19 +50,29 @@ public class AuthController {
     private void handleLogin(ActionEvent event) {
         String username = usernameField.getText().trim();
         String password = passwordField.getText().trim();
+
         if (username.isEmpty() || password.isEmpty()) {
             Toast.show((Stage) container.getScene().getWindow(), "Please fill in all fields!", 2000, false);
             return;
         }
 
         try {
-            if (sendRequest(API_BASE + "/login", username, password)) {
+            ApiResponse<User> response = sendRequest(API_BASE + "/login", username, password);
+
+            if (response != null && response.getCode() == 1000 && response.getResult() != null) {
+                UserSession.getInstance().setUser(response.getResult());
+
+                Toast.show((Stage) container.getScene().getWindow(), "Login successful!", 1500, true);
                 openBrowser();
             } else {
-                Toast.show((Stage) container.getScene().getWindow(), "Invalid username or password", 2000, false);
+                String msg = (response != null && response.getMessage() != null)
+                        ? response.getMessage()
+                        : "Invalid username or password";
+                Toast.show((Stage) container.getScene().getWindow(), msg, 2000, false);
             }
-        } catch (Exception e) {
-            Toast.show((Stage) container.getScene().getWindow(), "Connection error: " + e.getMessage(), 2000, false);
+        } catch (IOException e) {
+            Toast.show((Stage) container.getScene().getWindow(),
+                    "Connection error: " + e.getMessage(), 2000, false);
         }
     }
 
@@ -68,17 +85,24 @@ public class AuthController {
         }
 
         try {
-            if (sendRequest(API_BASE + "/register", username, password)) {
+            ApiResponse<User> response = sendRequest(API_BASE + "/register", username, password);
+
+            if (response != null && response.getCode() == 1000) {
+                Toast.show((Stage) container.getScene().getWindow(), "Registration successful!", 1500, true);
                 openBrowser();
             } else {
-                Toast.show((Stage) container.getScene().getWindow(), "Username already exists or registration failed", 2000, false);
+                String msg = (response != null && response.getMessage() != null)
+                        ? response.getMessage()
+                        : "Username already exists or registration failed";
+                Toast.show((Stage) container.getScene().getWindow(), msg, 2000, false);
             }
-        } catch (Exception e) {
-            Toast.show((Stage) container.getScene().getWindow(), "Connection error: " + e.getMessage(), 2000, false);
+        } catch (IOException e) {
+            Toast.show((Stage) container.getScene().getWindow(),
+                    "Connection error: " + e.getMessage(), 2000, false);
         }
     }
 
-    private boolean sendRequest(String apiUrl, String username, String password) throws IOException {
+    private ApiResponse<User> sendRequest(String apiUrl, String username, String password) throws IOException {
         URL url = new URL(apiUrl);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("POST");
@@ -90,7 +114,19 @@ public class AuthController {
             os.write(json.getBytes());
         }
 
-        return conn.getResponseCode() == 200;
+        BufferedReader reader = new BufferedReader(new InputStreamReader(
+                conn.getResponseCode() == 200 ? conn.getInputStream() : conn.getErrorStream()
+        ));
+
+        StringBuilder response = new StringBuilder();
+        String line;
+        while ((line = reader.readLine()) != null) {
+            response.append(line);
+        }
+
+        Gson gson = new Gson();
+        return gson.fromJson(response.toString(),
+                TypeToken.getParameterized(ApiResponse.class, User.class).getType());
     }
 
     private void openBrowser() throws IOException {
