@@ -4,6 +4,7 @@ import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.beans.property.StringProperty;
+import javafx.beans.value.ObservableValue;
 
 public class HistoryEntry {
     private final BooleanProperty selected = new SimpleBooleanProperty(false);
@@ -39,5 +40,17 @@ public class HistoryEntry {
 
     public void setSelected(boolean v) {
         selected.set(v);
+    }
+
+    public ObservableValue<String> titleProperty() {
+        return title;
+    }
+
+    public ObservableValue<String> visitedAtProperty() {
+        return date;
+    }
+
+    public ObservableValue<String> urlProperty() {
+        return url;
     }
 }
