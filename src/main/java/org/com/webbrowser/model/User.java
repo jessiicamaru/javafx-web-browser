@@ -7,19 +7,17 @@ public class User {
     private String username;
     private String password;
     private String theme;
-    private List<String> bookmarks;
-    private List<String> histories;
+    private List<Bookmark> bookmarks;
 
     public User() {
     }
 
-    public User(int id, String username, String password, String theme, List<String> bookmarks, List<String> histories) {
+    public User(int id, String username, String password, String theme, List<Bookmark> bookmarks, List<String> histories) {
         this.id = id;
         this.username = username;
         this.password = password;
         this.theme = theme;
         this.bookmarks = bookmarks;
-        this.histories = histories;
     }
 
     public void setId(int id) {
@@ -38,12 +36,8 @@ public class User {
         this.theme = theme;
     }
 
-    public void setBookmarks(List<String> bookmarks) {
+    public void setBookmarks(List<Bookmark> bookmarks) {
         this.bookmarks = bookmarks;
-    }
-
-    public void setHistories(List<String> histories) {
-        this.histories = histories;
     }
 
     public int getId() {
@@ -62,11 +56,7 @@ public class User {
         return theme;
     }
 
-    public List<String> getBookmarks() {
+    public List<Bookmark> getBookmarks() {
         return bookmarks;
-    }
-
-    public List<String> getHistories() {
-        return histories;
     }
 }
