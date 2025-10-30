@@ -5,7 +5,6 @@ import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
 import javafx.fxml.Initializable;
 import javafx.scene.Parent;
-import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.control.cell.CheckBoxTableCell;
 import javafx.scene.layout.HBox;
@@ -43,7 +42,7 @@ public class WebBrowserTcpController implements Initializable {
     @FXML
     private Button bookmarkButton;
 
-    private final Map<String, String> bookmarks = new HashMap<>();
+    private final Map<String, Long> bookmarkIds = new HashMap<>();
     private final Map<Tab, List<String>> history = new HashMap<>();
     private final Map<Tab, Integer> historyIndex = new HashMap<>();
     private final ObservableList<HistoryEntry> globalHistory = FXCollections.observableArrayList();
@@ -51,6 +50,8 @@ public class WebBrowserTcpController implements Initializable {
     @Override
     public void initialize(URL location, ResourceBundle resources) {
         addNewTab("newtab");
+
+        loadBookmarksFromServer();
 
         goButton.setOnAction(_ -> loadUrl(getCurrentTab(), urlField.getText(), true));
         urlField.setOnAction(_ -> loadUrl(getCurrentTab(), urlField.getText(), true));
@@ -80,7 +81,15 @@ public class WebBrowserTcpController implements Initializable {
 
         bookmarkButton.setOnAction(_ -> {
             String currentUrl = urlField.getText();
-            if (currentUrl == null || currentUrl.isEmpty()) return;
+
+            if (currentUrl == null || currentUrl.isEmpty() || currentUrl.equals("about:blank")) {
+                Alert alert = new Alert(Alert.AlertType.WARNING);
+                alert.setTitle("Invalid URL");
+                alert.setHeaderText(null);
+                alert.setContentText("Không thể thêm bookmark vì URL trống hoặc không hợp lệ!");
+                alert.showAndWait();
+                return;
+            }
 
             TextInputDialog dialog = new TextInputDialog("Bookmark name");
             dialog.setTitle("Add Bookmark");
@@ -88,17 +97,71 @@ public class WebBrowserTcpController implements Initializable {
             dialog.setContentText("Name:");
 
             dialog.showAndWait().ifPresent(name -> {
-                bookmarks.put(name, currentUrl);
-                addBookmarkButton(name, currentUrl);
+                if (name == null || name.trim().isEmpty()) {
+                    Alert alert = new Alert(Alert.AlertType.WARNING);
+                    alert.setTitle("Invalid Name");
+                    alert.setHeaderText(null);
+                    alert.setContentText("Tên bookmark không được để trống!");
+                    alert.showAndWait();
+                    return;
+                }
+
+                addBookmarkToServer(name.trim(), currentUrl.trim());
             });
         });
     }
 
-    private void addBookmarkButton(String name, String url) {
+    private void addBookmarkButton(String name, String url, Long id) {
         Button bmButton = new Button(name);
         bmButton.setOnAction(_ -> loadUrl(getCurrentTab(), url, true));
+        bmButton.setUserData(id); // ✅ Lưu id vào button
+
+        ContextMenu menu = new ContextMenu();
+
+        MenuItem editItem = new MenuItem("Edit");
+        editItem.setOnAction(e -> {
+            TextInputDialog nameDialog = new TextInputDialog(name);
+            nameDialog.setTitle("Edit Bookmark");
+            nameDialog.setHeaderText("Chỉnh sửa tên bookmark");
+            nameDialog.setContentText("Tên:");
+
+            nameDialog.showAndWait().ifPresent(updatedName -> {
+                TextInputDialog urlDialog = new TextInputDialog(url);
+                urlDialog.setTitle("Edit Bookmark");
+                urlDialog.setHeaderText("Chỉnh sửa link bookmark");
+                urlDialog.setContentText("URL:");
+
+                urlDialog.showAndWait().ifPresent(updatedUrl -> {
+                    bmButton.setText(updatedName);
+                    bmButton.setOnAction(ev -> loadUrl(getCurrentTab(), updatedUrl, true));
+
+                    Long buttonId = (Long) bmButton.getUserData(); // ✅ Lấy id đúng
+                    if (buttonId != null) {
+                        updateBookmarkOnServer(buttonId, updatedName, updatedUrl);
+                    } else {
+                        System.out.println("⚠️ Bookmark chưa có ID — bỏ qua cập nhật server");
+                    }
+                });
+            });
+        });
+
+        MenuItem deleteItem = new MenuItem("Delete");
+        deleteItem.setOnAction(e -> {
+            bookmarkBar.getItems().remove(bmButton);
+            Long buttonId = (Long) bmButton.getUserData(); // ✅ Lấy id trực tiếp từ button
+            if (buttonId != null) {
+                deleteBookmarkFromServer(buttonId);
+            } else {
+                System.out.println("⚠️ Bookmark chưa có ID — bỏ qua xóa server");
+            }
+        });
+
+        menu.getItems().addAll(editItem, deleteItem);
+        bmButton.setContextMenu(menu);
+
         bookmarkBar.getItems().add(bmButton);
     }
+
 
     private void addNewTab(String url) {
         Tab tab = new Tab("New Tab");
@@ -257,7 +320,7 @@ public class WebBrowserTcpController implements Initializable {
                     .collect(Collectors.toList());
             for (HistoryEntry entry : checked) {
                 String name = (entry.getTitle() != null && !entry.getTitle().isEmpty()) ? entry.getTitle() : entry.getUrl();
-                addBookmarkButton(name, entry.getUrl());
+                addBookmarkToServer(name, entry.getUrl());
                 entry.selectedProperty().set(false);
             }
         });
@@ -281,4 +344,148 @@ public class WebBrowserTcpController implements Initializable {
         tabPane.getSelectionModel().select(historyTab);
     }
 
+    private void addBookmarkToServer(String title, String url) {
+        Integer userId = org.com.webbrowser.session.UserSession.getInstance().getUserId();
+        if (userId == null) {
+            System.out.println("⚠️ User chưa đăng nhập — không thể thêm bookmark");
+            return;
+        }
+
+        new Thread(() -> {
+            try {
+                String apiUrl = "http://localhost:8080/api/bookmark/add-bookmark";
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(apiUrl).openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setDoOutput(true);
+
+                String jsonInput = String.format(
+                        "{\"userId\": %d, \"bookmarks\": [{\"title\": \"%s\", \"url\": \"%s\"}]}",
+                        userId, title, url
+                );
+
+                try (java.io.OutputStream os = conn.getOutputStream()) {
+                    byte[] input = jsonInput.getBytes("utf-8");
+                    os.write(input, 0, input.length);
+                }
+
+                int code = conn.getResponseCode();
+                if (code == 200 || code == 201) {
+                    loadBookmarksFromServer();
+                    System.out.println("✅ Bookmark list updated after adding new one");
+
+                } else {
+                    System.out.println("⚠️ Lỗi khi thêm bookmark: HTTP " + code);
+                }
+
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+        }).start();
+    }
+
+
+    private void updateBookmarkOnServer(Long id, String newTitle, String newUrl) {
+        new Thread(() -> {
+            try {
+                String apiUrl = "http://localhost:8080/api/bookmark/update-bookmark/" + id;
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(apiUrl).openConnection();
+                conn.setRequestMethod("PUT");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setDoOutput(true);
+
+                String jsonInput = String.format(
+                        "{\"title\": \"%s\", \"url\": \"%s\"}", newTitle, newUrl
+                );
+
+                try (java.io.OutputStream os = conn.getOutputStream()) {
+                    byte[] input = jsonInput.getBytes("utf-8");
+                    os.write(input, 0, input.length);
+                }
+
+                int code = conn.getResponseCode();
+                if (code == 200) {
+                    loadBookmarksFromServer();
+                    System.out.println("✅ Bookmark updated successfully (ID: " + id + ")");
+                } else {
+                    System.out.println("⚠️ Lỗi khi cập nhật bookmark: HTTP " + code);
+                }
+
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+        }).start();
+    }
+
+    private void deleteBookmarkFromServer(Long id) {
+        new Thread(() -> {
+            try {
+                String apiUrl = "http://localhost:8080/api/bookmark/delete-bookmark/" + id;
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(apiUrl).openConnection();
+                conn.setRequestMethod("DELETE");
+
+                int code = conn.getResponseCode();
+                if (code == 200) {
+                    loadBookmarksFromServer();
+                    System.out.println("🗑️ Bookmark deleted successfully (ID: " + id + ")");
+                } else {
+                    System.out.println("⚠️ Lỗi khi xóa bookmark: HTTP " + code);
+                }
+
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+        }).start();
+    }
+
+    private void loadBookmarksFromServer() {
+        Integer userId = org.com.webbrowser.session.UserSession.getInstance().getUserId();
+        if (userId == null) {
+            System.out.println("⚠️ User chưa đăng nhập — bỏ qua tải bookmark");
+            return;
+        }
+
+        new Thread(() -> {
+            try {
+                String apiUrl = "http://localhost:8080/api/bookmark/get-bookmark?userId=" + userId;
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(apiUrl).openConnection();
+                conn.setRequestMethod("GET");
+                conn.setRequestProperty("Content-Type", "application/json");
+
+                if (conn.getResponseCode() == 200) {
+                    java.io.InputStream is = conn.getInputStream();
+                    java.util.Scanner sc = new java.util.Scanner(is).useDelimiter("\\A");
+                    String json = sc.hasNext() ? sc.next() : "";
+
+                    com.google.gson.JsonObject root = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+                    com.google.gson.JsonArray result = root.getAsJsonArray("result");
+
+                    Platform.runLater(() -> {
+                        bookmarkBar.getItems().clear();
+                        bookmarkIds.clear();
+                    });
+
+                    for (com.google.gson.JsonElement e : result) {
+                        com.google.gson.JsonObject obj = e.getAsJsonObject();
+                        Long id = obj.get("id").getAsLong();
+                        String title = obj.get("title").getAsString();
+                        String url = obj.get("url").getAsString();
+
+                        System.out.println(id + " " + title + " " + url);
+
+                        Platform.runLater(() -> addBookmarkButton(title, url, id));
+                    }
+                } else {
+                    System.out.println("⚠️ Không thể lấy bookmark, mã lỗi: " + conn.getResponseCode());
+                }
+
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+        }).start();
+    }
+
+    private Long findBookmarkIdByName(String name) {
+        return bookmarkIds.get(name);
+    }
 }
