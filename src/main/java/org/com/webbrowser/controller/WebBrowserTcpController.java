@@ -1,12 +1,14 @@
 package org.com.webbrowser.controller;
 
 import javafx.application.Platform;
+import javafx.concurrent.Worker;
 import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
 import javafx.fxml.Initializable;
 import javafx.scene.Parent;
 import javafx.scene.control.*;
 import javafx.scene.control.cell.CheckBoxTableCell;
+import javafx.scene.input.KeyCode;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import javafx.scene.web.WebEngine;
@@ -63,6 +65,33 @@ public class WebBrowserTcpController implements Initializable {
             if (tabPane.getTabs().isEmpty()) Platform.exit();
         });
 
+        tabPane.sceneProperty().addListener((obs, oldScene, newScene) -> {
+            if (newScene != null) {
+                newScene.addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, event -> {
+                    // ✅ Xử lý Ctrl + Tab chuyển tab
+                    if (event.isControlDown() && event.getCode() == KeyCode.TAB) {
+                        int totalTabs = tabPane.getTabs().size();
+                        if (totalTabs > 1) {
+                            int currentIndex = tabPane.getSelectionModel().getSelectedIndex();
+
+                            Platform.runLater(() -> {
+                                int nextIndex;
+                                if (event.isShiftDown()) {
+                                    nextIndex = (currentIndex - 1 + totalTabs) % totalTabs;
+                                } else {
+                                    nextIndex = (currentIndex + 1) % totalTabs;
+                                }
+                                tabPane.getSelectionModel().select(nextIndex);
+                            });
+                        }
+                        event.consume();
+                    }
+                });
+            }
+        });
+
+
+
         tabPane.getSelectionModel().selectedItemProperty().addListener((_, _, newTab) -> {
             if (newTab == null) urlField.clear();
             else urlField.setText((String) newTab.getUserData());
@@ -73,6 +102,36 @@ public class WebBrowserTcpController implements Initializable {
                 newScene.addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, event -> {
                     if (event.isControlDown() && event.getCode() == javafx.scene.input.KeyCode.H) {
                         openHistoryWindow();
+                        event.consume();
+                    }
+
+                    if (event.isControlDown() && event.getCode() == javafx.scene.input.KeyCode.T) {
+                        addNewTab("newtab");
+                        event.consume();
+                    }
+
+                    if (event.isControlDown() && event.getCode() == javafx.scene.input.KeyCode.W) {
+                        Tab currentTab = getCurrentTab();
+                        if (currentTab != null) {
+                            tabPane.getTabs().remove(currentTab);
+                            event.consume();
+                        }
+                    }
+
+                    if (event.isControlDown() && event.getCode() == javafx.scene.input.KeyCode.E) {
+                        if (urlField != null) {
+                            Platform.runLater(() -> {
+                                urlField.requestFocus();
+                                urlField.selectAll();
+                            });
+                        }
+                        event.consume();
+                    }
+
+                    if (event.isControlDown() && event.getCode() == javafx.scene.input.KeyCode.D) {
+                        if (bookmarkButton != null) {
+                            Platform.runLater(() -> bookmarkButton.fire());
+                        }
                         event.consume();
                     }
                 });
@@ -148,7 +207,7 @@ public class WebBrowserTcpController implements Initializable {
         MenuItem deleteItem = new MenuItem("Delete");
         deleteItem.setOnAction(e -> {
             bookmarkBar.getItems().remove(bmButton);
-            Long buttonId = (Long) bmButton.getUserData(); // ✅ Lấy id trực tiếp từ button
+            Long buttonId = (Long) bmButton.getUserData();
             if (buttonId != null) {
                 deleteBookmarkFromServer(buttonId);
             } else {
@@ -200,16 +259,34 @@ public class WebBrowserTcpController implements Initializable {
                 tab.setContent(webView);
                 tab.setUserData(url);
                 urlField.setText(url);
-                tab.setText(url.replaceFirst("https://", ""));
+
+                if (url.contains("https://www.google.com/search?q=")) {
+                    try {
+                        String query = url.substring(url.indexOf("q=") + 2);
+                        if (query.contains("&")) {
+                            query = query.substring(0, query.indexOf("&"));
+                        }
+                        query = java.net.URLDecoder.decode(query, "UTF-8");
+
+                        tab.setText(query + " - Tìm kiếm trên Google");
+                    } catch (Exception e) {
+                        tab.setText("Tìm kiếm trên Google");
+                    }
+                } else {
+                    tab.setText(url.replaceFirst("https://", ""));
+                }
 
                 engine.load(url);
 
-                engine.documentProperty().addListener((obs, oldDoc, newDoc) -> {
-                    if (newDoc != null) {
+                engine.getLoadWorker().stateProperty().addListener((obs, oldState, newState) -> {
+                    if (newState == Worker.State.SUCCEEDED) {
                         String title = engine.getTitle() != null ? engine.getTitle() : url;
                         String visitedAt = LocalDateTime.now().toString();
-                        globalHistory.add(new HistoryEntry(title, url, visitedAt));
-                        updateHistory(tab, url, addToHistory);
+
+                        if (globalHistory.isEmpty() || !globalHistory.get(globalHistory.size() - 1).getUrl().equals(url)) {
+                            globalHistory.add(new HistoryEntry(title, url, visitedAt));
+                            updateHistory(tab, url, addToHistory);
+                        }
                     }
                 });
             } catch (Exception e) {
@@ -266,10 +343,22 @@ public class WebBrowserTcpController implements Initializable {
         if (input == null || input.isEmpty()) return "";
 
         String lower = input.toLowerCase();
-        if (!lower.startsWith("http://") && !lower.startsWith("https://"))
+
+        if (lower.startsWith("http://") || lower.startsWith("https://")) {
+            return input;
+        }
+        if (lower.contains(".") && !lower.contains(" ")) {
             return "https://" + input;
-        return input;
+        }
+
+        try {
+            String query = java.net.URLEncoder.encode(input, "UTF-8");
+            return "https://www.google.com/search?q=" + query;
+        } catch (Exception e) {
+            return "https://www.google.com/search?q=" + input;
+        }
     }
+
 
     private void openHistoryWindow() {
         Tab historyTab = new Tab("History");
@@ -483,9 +572,5 @@ public class WebBrowserTcpController implements Initializable {
                 ex.printStackTrace();
             }
         }).start();
-    }
-
-    private Long findBookmarkIdByName(String name) {
-        return bookmarkIds.get(name);
     }
 }
