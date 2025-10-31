@@ -8,6 +8,7 @@ import javafx.fxml.Initializable;
 import javafx.scene.Parent;
 import javafx.scene.control.*;
 import javafx.scene.input.KeyCode;
+import javafx.scene.layout.HBox;
 import javafx.scene.web.WebEngine;
 import javafx.scene.web.WebView;
 import org.com.webbrowser.WebBrowserApplication;
@@ -41,6 +42,16 @@ public class WebBrowserTcpController implements Initializable {
     private ToolBar bookmarkBar;
     @FXML
     private Button bookmarkButton;
+    @FXML
+    private HBox findBar;
+    @FXML
+    private TextField findField;
+    @FXML
+    private Button nextButton;
+    @FXML
+    private Button prevButton;
+    @FXML
+    private Button closeFindButton;
 
     private final Map<String, Long> bookmarkIds = new HashMap<>();
     private final Map<Tab, List<String>> history = new HashMap<>();
@@ -55,11 +66,19 @@ public class WebBrowserTcpController implements Initializable {
         loadBookmarksFromServer();
         globalHistory.setAll(HistoryService.loadHistory());
 
+        findBar.setVisible(false);
+        findBar.setManaged(false);
+
         goButton.setOnAction(_ -> loadUrl(getCurrentTab(), urlField.getText(), true));
         urlField.setOnAction(_ -> loadUrl(getCurrentTab(), urlField.getText(), true));
         addTabButton.setOnAction(_ -> addNewTab("newtab"));
         backButton.setOnAction(_ -> goBack());
         forwardButton.setOnAction(_ -> goForward());
+
+        closeFindButton.setOnAction(e -> closeFindBar());
+        findField.textProperty().addListener((obs, oldText, newText) -> findInPage(newText, true));
+        nextButton.setOnAction(e -> findInPage(findField.getText(), true));
+        prevButton.setOnAction(e -> findInPage(findField.getText(), false));
 
         tabPane.getTabs().addListener((javafx.collections.ListChangeListener<Tab>) _ -> {
             if (tabPane.getTabs().isEmpty()) Platform.exit();
@@ -132,6 +151,11 @@ public class WebBrowserTcpController implements Initializable {
                         if (bookmarkButton != null) {
                             Platform.runLater(() -> bookmarkButton.fire());
                         }
+                        event.consume();
+                    }
+
+                    if (event.isControlDown() && event.getCode() == KeyCode.F) {
+                        openFindBar();
                         event.consume();
                     }
                 });
@@ -429,4 +453,40 @@ public class WebBrowserTcpController implements Initializable {
             }
         }).start();
     }
+
+    private void openFindBar() {
+        findBar.setVisible(true);
+        findBar.setManaged(true);
+        findField.requestFocus();
+    }
+
+    private void closeFindBar() {
+        findBar.setVisible(false);
+        findBar.setManaged(false);
+    }
+
+    private void findInPage(String query, boolean forward) {
+        if (query == null || query.isEmpty()) return;
+        Tab currentTab = getCurrentTab();
+        if (currentTab == null) return;
+
+        if (!(currentTab.getContent() instanceof WebView webView)) return;
+
+        WebEngine webEngine = webView.getEngine();
+
+        String js = """
+        if (window.find) {
+            window.find('%s', false, %b, true, false, false, false);
+        }
+    """.formatted(query.replace("'", "\\'"), !forward);
+
+        Platform.runLater(() -> {
+            try {
+                webEngine.executeScript(js);
+            } catch (Exception e) {
+                System.err.println("❌ Lỗi khi tìm trong trang: " + e.getMessage());
+            }
+        });
+    }
+
 }
