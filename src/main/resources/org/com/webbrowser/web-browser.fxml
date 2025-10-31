@@ -4,26 +4,33 @@
 <?import javafx.scene.layout.*?>
 
 <BorderPane xmlns="http://javafx.com/javafx"
-            xmlns:fx="http://javafx.com/fxml"
-            fx:controller="org.com.webbrowser.controller.WebBrowserTcpController">
+              xmlns:fx="http://javafx.com/fxml"
+              fx:controller="org.com.webbrowser.controller.WebBrowserTcpController">
 
-    <top>
-        <VBox>
-            <ToolBar>
-                <Button fx:id="backButton" text="⟵"/>
-                <Button fx:id="forwardButton" text="⟶"/>
-                <TextField fx:id="urlField" promptText="Enter URL..." HBox.hgrow="ALWAYS"/>
-                <Button fx:id="bookmarkButton" text="⭐"/>
-                <Button fx:id="goButton" text="Go"/>
-                <Button fx:id="addTabButton" text="+"/>
-            </ToolBar>
+<top>
+    <VBox>
+        <HBox fx:id="findBar" spacing="5" alignment="CENTER_RIGHT" visible="false"
+              style="-fx-background-color: rgba(255,255,255,0.9); -fx-padding:5; -fx-border-color: #ccc;">
+            <TextField fx:id="findField" promptText="Tìm trong trang..." />
+            <Button fx:id="prevButton" text="◀" />
+            <Button fx:id="nextButton" text="▶" />
+            <Button fx:id="closeFindButton" text="✕" />
+        </HBox>
 
-            <ToolBar fx:id="bookmarkBar" minHeight="35">
-            </ToolBar>
-        </VBox>
-    </top>
+        <ToolBar>
+            <Button fx:id="backButton" text="⟵"/>
+            <Button fx:id="forwardButton" text="⟶"/>
+            <TextField fx:id="urlField" promptText="Enter URL..." HBox.hgrow="ALWAYS"/>
+            <Button fx:id="bookmarkButton" text="⭐"/>
+            <Button fx:id="goButton" text="Go"/>
+            <Button fx:id="addTabButton" text="+"/>
+        </ToolBar>
 
-    <center>
-        <TabPane fx:id="tabPane" tabClosingPolicy="ALL_TABS"/>
-    </center>
+        <ToolBar fx:id="bookmarkBar" minHeight="35" />
+    </VBox>
+</top>
+
+<center>
+    <TabPane fx:id="tabPane" tabClosingPolicy="ALL_TABS"/>
+</center>
 </BorderPane>
