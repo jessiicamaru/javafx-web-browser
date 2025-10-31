@@ -32,6 +32,10 @@ build/
 !**/src/test/**/build/
 
 /data/history/
+/data/users/
+
+.env
+.env.*
 
 ### VS Code ###
 .vscode/

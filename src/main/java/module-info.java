@@ -4,6 +4,7 @@ module org.com.webbrowser {
     requires javafx.web;
     requires org.jsoup;
     requires com.google.gson;
+    requires io.github.cdimascio.dotenv.java;
 
     opens org.com.webbrowser.model to com.google.gson;
     opens org.com.webbrowser to javafx.fxml;
