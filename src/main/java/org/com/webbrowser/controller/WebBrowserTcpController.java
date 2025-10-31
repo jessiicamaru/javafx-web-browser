@@ -7,10 +7,7 @@ import javafx.fxml.FXMLLoader;
 import javafx.fxml.Initializable;
 import javafx.scene.Parent;
 import javafx.scene.control.*;
-import javafx.scene.control.cell.CheckBoxTableCell;
 import javafx.scene.input.KeyCode;
-import javafx.scene.layout.HBox;
-import javafx.scene.layout.VBox;
 import javafx.scene.web.WebEngine;
 import javafx.scene.web.WebView;
 import org.com.webbrowser.WebBrowserApplication;
@@ -20,11 +17,11 @@ import java.io.IOException;
 import java.net.URL;
 import java.time.LocalDateTime;
 import java.util.*;
-import java.util.stream.Collectors;
 
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
-import javafx.geometry.Insets;
+
+import org.com.webbrowser.service.BookmarkService;
 
 public class WebBrowserTcpController implements Initializable {
     @FXML
@@ -48,6 +45,7 @@ public class WebBrowserTcpController implements Initializable {
     private final Map<Tab, List<String>> history = new HashMap<>();
     private final Map<Tab, Integer> historyIndex = new HashMap<>();
     private final ObservableList<HistoryEntry> globalHistory = FXCollections.observableArrayList();
+    private final BookmarkService bookmarkService = new BookmarkService();
 
     @Override
     public void initialize(URL location, ResourceBundle resources) {
@@ -165,7 +163,7 @@ public class WebBrowserTcpController implements Initializable {
                     return;
                 }
 
-                addBookmarkToServer(name.trim(), currentUrl.trim());
+                bookmarkService.addBookmark(name.trim(), currentUrl.trim(), this::loadBookmarksFromServer);
             });
         });
     }
@@ -194,9 +192,9 @@ public class WebBrowserTcpController implements Initializable {
                     bmButton.setText(updatedName);
                     bmButton.setOnAction(ev -> loadUrl(getCurrentTab(), updatedUrl, true));
 
-                    Long buttonId = (Long) bmButton.getUserData(); // ✅ Lấy id đúng
+                    Long buttonId = (Long) bmButton.getUserData();
                     if (buttonId != null) {
-                        updateBookmarkOnServer(buttonId, updatedName, updatedUrl);
+                        bookmarkService.updateBookmark(buttonId, updatedName, updatedUrl, this::loadBookmarksFromServer);
                     } else {
                         System.out.println("⚠️ Bookmark chưa có ID — bỏ qua cập nhật server");
                     }
@@ -209,7 +207,7 @@ public class WebBrowserTcpController implements Initializable {
             bookmarkBar.getItems().remove(bmButton);
             Long buttonId = (Long) bmButton.getUserData();
             if (buttonId != null) {
-                deleteBookmarkFromServer(buttonId);
+                bookmarkService.deleteBookmark(buttonId, this::loadBookmarksFromServer);
             } else {
                 System.out.println("⚠️ Bookmark chưa có ID — bỏ qua xóa server");
             }
@@ -361,171 +359,26 @@ public class WebBrowserTcpController implements Initializable {
 
 
     private void openHistoryWindow() {
-        Tab historyTab = new Tab("History");
+        try {
+            FXMLLoader loader = new FXMLLoader(WebBrowserApplication.class.getResource("history-view.fxml"));
+            Parent root = loader.load();
 
-        history.putIfAbsent(historyTab, new ArrayList<>());
-        historyIndex.putIfAbsent(historyTab, -1);
+            HistoryController controller = loader.getController();
+            controller.setData(globalHistory, bookmarkService, url -> addNewTab(url));
 
-        TableView<HistoryEntry> table = new TableView<>();
-        table.setEditable(true);
+            Tab historyTab = new Tab("History");
+            historyTab.setContent(root);
 
-        TableColumn<HistoryEntry, Boolean> selectCol = new TableColumn<>("Select");
-        selectCol.setCellValueFactory(cellData -> cellData.getValue().selectedProperty());
-        selectCol.setCellFactory(CheckBoxTableCell.forTableColumn(selectCol));
-        selectCol.setEditable(true);
-        selectCol.setPrefWidth(80);
+            tabPane.getTabs().add(historyTab);
+            tabPane.getSelectionModel().select(historyTab);
 
-        TableColumn<HistoryEntry, String> timeCol = new TableColumn<>("Visited At");
-        timeCol.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(data.getValue().getDate()));
-        timeCol.setPrefWidth(220);
-
-        TableColumn<HistoryEntry, String> titleCol = new TableColumn<>("Title");
-        titleCol.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(data.getValue().getTitle()));
-        titleCol.setPrefWidth(360);
-
-        TableColumn<HistoryEntry, String> urlCol = new TableColumn<>("URL");
-        urlCol.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(data.getValue().getUrl()));
-        urlCol.setPrefWidth(360);
-
-        table.getColumns().addAll(selectCol, timeCol, titleCol, urlCol);
-
-        table.setItems(globalHistory);
-
-        table.setRowFactory(tv -> {
-            TableRow<HistoryEntry> row = new TableRow<>();
-            row.setOnMouseClicked(e -> {
-                if (e.getClickCount() == 2 && !row.isEmpty()) {
-                    HistoryEntry entry = row.getItem();
-                    addNewTab(entry.getUrl());   // mở ở tab mới
-                }
-            });
-            return row;
-        });
-
-        Button bookmarkBtn = new Button("Add to Bookmarks");
-        bookmarkBtn.setOnAction(_ev -> {
-            List<HistoryEntry> checked = globalHistory.stream()
-                    .filter(h -> h.selectedProperty().get())
-                    .collect(Collectors.toList());
-            for (HistoryEntry entry : checked) {
-                String name = (entry.getTitle() != null && !entry.getTitle().isEmpty()) ? entry.getTitle() : entry.getUrl();
-                addBookmarkToServer(name, entry.getUrl());
-                entry.selectedProperty().set(false);
-            }
-        });
-
-        Button deleteBtn = new Button("Delete Selected");
-        deleteBtn.setOnAction(_ev -> {
-            List<HistoryEntry> toDelete = globalHistory.stream()
-                    .filter(h -> h.selectedProperty().get())
-                    .collect(Collectors.toList());
-            globalHistory.removeAll(toDelete);
-        });
-
-        HBox actionBar = new HBox(10, bookmarkBtn, deleteBtn);
-        actionBar.setPadding(new Insets(10));
-
-        VBox layout = new VBox(10, table, actionBar);
-        layout.setPadding(new Insets(10));
-
-        historyTab.setContent(layout);
-        tabPane.getTabs().add(historyTab);
-        tabPane.getSelectionModel().select(historyTab);
-    }
-
-    private void addBookmarkToServer(String title, String url) {
-        Integer userId = org.com.webbrowser.session.UserSession.getInstance().getUserId();
-        if (userId == null) {
-            System.out.println("⚠️ User chưa đăng nhập — không thể thêm bookmark");
-            return;
+        } catch (IOException e) {
+            e.printStackTrace();
+            Alert alert = new Alert(Alert.AlertType.ERROR, "Không thể mở History view: " + e.getMessage());
+            alert.showAndWait();
         }
-
-        new Thread(() -> {
-            try {
-                String apiUrl = "http://localhost:8080/api/bookmark/add-bookmark";
-                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(apiUrl).openConnection();
-                conn.setRequestMethod("POST");
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setDoOutput(true);
-
-                String jsonInput = String.format(
-                        "{\"userId\": %d, \"bookmarks\": [{\"title\": \"%s\", \"url\": \"%s\"}]}",
-                        userId, title, url
-                );
-
-                try (java.io.OutputStream os = conn.getOutputStream()) {
-                    byte[] input = jsonInput.getBytes("utf-8");
-                    os.write(input, 0, input.length);
-                }
-
-                int code = conn.getResponseCode();
-                if (code == 200 || code == 201) {
-                    loadBookmarksFromServer();
-                    System.out.println("✅ Bookmark list updated after adding new one");
-
-                } else {
-                    System.out.println("⚠️ Lỗi khi thêm bookmark: HTTP " + code);
-                }
-
-            } catch (Exception ex) {
-                ex.printStackTrace();
-            }
-        }).start();
     }
 
-
-    private void updateBookmarkOnServer(Long id, String newTitle, String newUrl) {
-        new Thread(() -> {
-            try {
-                String apiUrl = "http://localhost:8080/api/bookmark/update-bookmark/" + id;
-                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(apiUrl).openConnection();
-                conn.setRequestMethod("PUT");
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setDoOutput(true);
-
-                String jsonInput = String.format(
-                        "{\"title\": \"%s\", \"url\": \"%s\"}", newTitle, newUrl
-                );
-
-                try (java.io.OutputStream os = conn.getOutputStream()) {
-                    byte[] input = jsonInput.getBytes("utf-8");
-                    os.write(input, 0, input.length);
-                }
-
-                int code = conn.getResponseCode();
-                if (code == 200) {
-                    loadBookmarksFromServer();
-                    System.out.println("✅ Bookmark updated successfully (ID: " + id + ")");
-                } else {
-                    System.out.println("⚠️ Lỗi khi cập nhật bookmark: HTTP " + code);
-                }
-
-            } catch (Exception ex) {
-                ex.printStackTrace();
-            }
-        }).start();
-    }
-
-    private void deleteBookmarkFromServer(Long id) {
-        new Thread(() -> {
-            try {
-                String apiUrl = "http://localhost:8080/api/bookmark/delete-bookmark/" + id;
-                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(apiUrl).openConnection();
-                conn.setRequestMethod("DELETE");
-
-                int code = conn.getResponseCode();
-                if (code == 200) {
-                    loadBookmarksFromServer();
-                    System.out.println("🗑️ Bookmark deleted successfully (ID: " + id + ")");
-                } else {
-                    System.out.println("⚠️ Lỗi khi xóa bookmark: HTTP " + code);
-                }
-
-            } catch (Exception ex) {
-                ex.printStackTrace();
-            }
-        }).start();
-    }
 
     private void loadBookmarksFromServer() {
         Integer userId = org.com.webbrowser.session.UserSession.getInstance().getUserId();

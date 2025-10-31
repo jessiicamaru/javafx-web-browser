@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+
+<VBox xmlns:fx="http://javafx.com/fxml"
+      fx:controller="org.com.webbrowser.controller.HistoryController"
+      spacing="10">
+
+    <padding>
+        <Insets top="10" right="10" bottom="10" left="10"/>
+    </padding>
+
+    <!-- Bảng lịch sử -->
+    <TableView fx:id="historyTable" editable="true" VBox.vgrow="ALWAYS">
+        <columns>
+            <TableColumn fx:id="selectCol" text="Select" prefWidth="80"/>
+            <TableColumn fx:id="timeCol" text="Visited At" prefWidth="220"/>
+            <TableColumn fx:id="titleCol" text="Title" prefWidth="360"/>
+            <TableColumn fx:id="urlCol" text="URL" prefWidth="360"/>
+        </columns>
+    </TableView>
+
+    <!-- Thanh hành động -->
+    <HBox fx:id="actionBar" spacing="10" alignment="CENTER_LEFT">
+        <padding>
+            <Insets top="10" right="10" bottom="10" left="10"/>
+        </padding>
+        <Button fx:id="bookmarkBtn" text="Add to Bookmarks" />
+        <Button fx:id="deleteBtn" text="Delete Selected" />
+    </HBox>
+
+</VBox>
