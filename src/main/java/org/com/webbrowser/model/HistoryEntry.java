@@ -18,6 +18,10 @@ public class HistoryEntry {
         this.date.set(date);
     }
 
+    public HistoryEntry(HistoryRecord record) {
+        this(record.getTitle(), record.getUrl(), record.getDate());
+    }
+
     public String getTitle() {
         return title.get();
     }
@@ -52,5 +56,9 @@ public class HistoryEntry {
 
     public ObservableValue<String> urlProperty() {
         return url;
+    }
+
+    public HistoryRecord toRecord() {
+        return new HistoryRecord(getTitle(), getUrl(), getDate());
     }
 }
