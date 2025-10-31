@@ -22,6 +22,7 @@ import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 
 import org.com.webbrowser.service.BookmarkService;
+import org.com.webbrowser.service.HistoryService;
 
 public class WebBrowserTcpController implements Initializable {
     @FXML
@@ -52,6 +53,7 @@ public class WebBrowserTcpController implements Initializable {
         addNewTab("newtab");
 
         loadBookmarksFromServer();
+        globalHistory.setAll(HistoryService.loadHistory());
 
         goButton.setOnAction(_ -> loadUrl(getCurrentTab(), urlField.getText(), true));
         urlField.setOnAction(_ -> loadUrl(getCurrentTab(), urlField.getText(), true));
@@ -283,6 +285,7 @@ public class WebBrowserTcpController implements Initializable {
 
                         if (globalHistory.isEmpty() || !globalHistory.get(globalHistory.size() - 1).getUrl().equals(url)) {
                             globalHistory.add(new HistoryEntry(title, url, visitedAt));
+                            HistoryService.addHistoryEntry(new HistoryEntry(title, url, visitedAt));
                             updateHistory(tab, url, addToHistory);
                         }
                     }
