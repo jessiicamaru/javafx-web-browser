@@ -64,7 +64,7 @@ public class WebBrowserTcpController implements Initializable {
         addNewTab("newtab");
 
         loadBookmarksFromServer();
-        globalHistory.setAll(HistoryService.loadHistory());
+        globalHistory.setAll(HistoryService.loadAllHistory());
 
         findBar.setVisible(false);
         findBar.setManaged(false);

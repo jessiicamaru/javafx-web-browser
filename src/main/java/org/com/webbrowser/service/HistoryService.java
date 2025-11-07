@@ -76,4 +76,35 @@ public class HistoryService {
         }
     }
 
+    public static List<HistoryEntry> loadAllHistory() {
+        Integer userId = UserSession.getInstance().getUserId();
+        if (userId == null) return new ArrayList<>();
+
+        File dir = new File(BASE_DIR);
+        if (!dir.exists() || !dir.isDirectory()) return new ArrayList<>();
+
+        List<HistoryEntry> allEntries = new ArrayList<>();
+
+        File[] files = dir.listFiles((d, name) -> name.startsWith("user_" + userId + "_") && name.endsWith(".json"));
+        if (files == null) return allEntries;
+
+        for (File file : files) {
+            try (Reader reader = new FileReader(file)) {
+                Type listType = new TypeToken<List<HistoryRecord>>(){}.getType();
+                List<HistoryRecord> records = gson.fromJson(reader, listType);
+                if (records != null) {
+                    allEntries.addAll(records.stream()
+                            .map(HistoryEntry::new)
+                            .collect(Collectors.toList()));
+                }
+            } catch (Exception e) {
+                System.err.println("⚠️ Lỗi khi đọc file history: " + file.getName());
+                e.printStackTrace();
+            }
+        }
+
+        allEntries.sort(Comparator.comparing(HistoryEntry::getDate).reversed());
+
+        return allEntries;
+    }
 }
