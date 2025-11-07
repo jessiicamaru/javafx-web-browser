@@ -9,6 +9,7 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import org.com.webbrowser.model.HistoryEntry;
 import org.com.webbrowser.service.BookmarkService;
+import org.com.webbrowser.utils.DateTimeFormatterUtil;
 
 import java.net.URL;
 import java.util.List;
@@ -47,7 +48,7 @@ public class HistoryController implements Initializable {
         selectCol.setEditable(true);
         selectCol.setPrefWidth(80);
 
-        timeCol.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(data.getValue().getDate()));
+        timeCol.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(DateTimeFormatterUtil.formatVisitedAt(data.getValue().getDate())));
         titleCol.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(data.getValue().getTitle()));
         urlCol.setCellValueFactory(data -> new javafx.beans.property.SimpleStringProperty(data.getValue().getUrl()));
 
