@@ -7,6 +7,8 @@ import javafx.fxml.FXMLLoader;
 import javafx.fxml.Initializable;
 import javafx.scene.Parent;
 import javafx.scene.control.*;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.input.KeyCode;
 import javafx.scene.layout.HBox;
 import javafx.scene.web.WebEngine;
@@ -59,6 +61,7 @@ public class WebBrowserTcpController implements Initializable {
     private final Map<Tab, Integer> historyIndex = new HashMap<>();
     private final ObservableList<HistoryEntry> globalHistory = FXCollections.observableArrayList();
     private final BookmarkService bookmarkService = new BookmarkService();
+    private final Map<String, Image> faviconCache = new HashMap<>();
 
     @Override
     public void initialize(URL location, ResourceBundle resources) {
@@ -309,6 +312,8 @@ public class WebBrowserTcpController implements Initializable {
                         String title = engine.getTitle() != null ? engine.getTitle() : url;
                         String visitedAt = LocalDateTime.now().toString();
 
+                        setTabFavicon(tab, url);
+
                         if (globalHistory.isEmpty() || !globalHistory.get(0).getUrl().equals(url)) {
                             globalHistory.add(0, new HistoryEntry(title, url, visitedAt));
                             HistoryService.addHistoryEntry(new HistoryEntry(title, url, visitedAt));
@@ -489,6 +494,44 @@ public class WebBrowserTcpController implements Initializable {
                 System.err.println("❌ Lỗi khi tìm trong trang: " + e.getMessage());
             }
         });
+    }
+
+
+    private void setTabFavicon(Tab tab, String url) {
+        try {
+            java.net.URI uri = new java.net.URI(url);
+            String domain = uri.getScheme() + "://" + uri.getHost();
+
+            if (faviconCache.containsKey(domain)) {
+                ImageView icon = new ImageView(faviconCache.get(domain));
+                icon.setFitWidth(16);
+                icon.setFitHeight(16);
+                Platform.runLater(() -> tab.setGraphic(icon));
+                return;
+            }
+
+            String faviconUrl = "https://www.google.com/s2/favicons?domain=" + uri.getHost() + "&sz=32";
+
+            Image favicon = new Image(faviconUrl, true);
+            favicon.errorProperty().addListener((obs, oldVal, newVal) -> {
+                if (newVal) {
+                    System.out.println("⚠️ Không tải được favicon cho " + domain);
+                }
+            });
+
+            favicon.progressProperty().addListener((obs, oldVal, newVal) -> {
+                if (newVal.doubleValue() >= 1.0) {
+                    faviconCache.put(domain, favicon);
+                    ImageView iconView = new ImageView(favicon);
+                    iconView.setFitWidth(16);
+                    iconView.setFitHeight(16);
+                    Platform.runLater(() -> tab.setGraphic(iconView));
+                }
+            });
+
+        } catch (Exception e) {
+            System.err.println("❌ Lỗi favicon: " + e.getMessage());
+        }
     }
 
 }
