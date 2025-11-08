@@ -24,6 +24,7 @@ import javafx.collections.ObservableList;
 
 import org.com.webbrowser.service.BookmarkService;
 import org.com.webbrowser.service.HistoryService;
+import org.com.webbrowser.utils.UrlAutoComplete;
 
 public class WebBrowserTcpController implements Initializable {
     @FXML
@@ -80,6 +81,8 @@ public class WebBrowserTcpController implements Initializable {
         nextButton.setOnAction(e -> findInPage(findField.getText(), true));
         prevButton.setOnAction(e -> findInPage(findField.getText(), false));
 
+        new UrlAutoComplete(urlField, globalHistory, url -> loadUrl(getCurrentTab(), url, true));
+
         tabPane.getTabs().addListener((javafx.collections.ListChangeListener<Tab>) _ -> {
             if (tabPane.getTabs().isEmpty()) Platform.exit();
         });
@@ -108,7 +111,6 @@ public class WebBrowserTcpController implements Initializable {
                 });
             }
         });
-
 
 
         tabPane.getSelectionModel().selectedItemProperty().addListener((_, _, newTab) -> {
@@ -307,8 +309,8 @@ public class WebBrowserTcpController implements Initializable {
                         String title = engine.getTitle() != null ? engine.getTitle() : url;
                         String visitedAt = LocalDateTime.now().toString();
 
-                        if (globalHistory.isEmpty() || !globalHistory.get(globalHistory.size() - 1).getUrl().equals(url)) {
-                            globalHistory.add(new HistoryEntry(title, url, visitedAt));
+                        if (globalHistory.isEmpty() || !globalHistory.get(0).getUrl().equals(url)) {
+                            globalHistory.add(0, new HistoryEntry(title, url, visitedAt));
                             HistoryService.addHistoryEntry(new HistoryEntry(title, url, visitedAt));
                             updateHistory(tab, url, addToHistory);
                         }
@@ -475,10 +477,10 @@ public class WebBrowserTcpController implements Initializable {
         WebEngine webEngine = webView.getEngine();
 
         String js = """
-        if (window.find) {
-            window.find('%s', false, %b, true, false, false, false);
-        }
-    """.formatted(query.replace("'", "\\'"), !forward);
+                    if (window.find) {
+                        window.find('%s', false, %b, true, false, false, false);
+                    }
+                """.formatted(query.replace("'", "\\'"), !forward);
 
         Platform.runLater(() -> {
             try {
