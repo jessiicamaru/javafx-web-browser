@@ -9,6 +9,7 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import org.com.webbrowser.model.HistoryEntry;
 import org.com.webbrowser.service.BookmarkService;
+import org.com.webbrowser.service.HistoryService;
 import org.com.webbrowser.utils.DateTimeFormatterUtil;
 
 import java.net.URL;
@@ -90,6 +91,10 @@ public class HistoryController implements Initializable {
         List<HistoryEntry> toDelete = globalHistory.stream()
                 .filter(h -> h.selectedProperty().get())
                 .collect(Collectors.toList());
+
+        if (toDelete.isEmpty()) return;
+
         globalHistory.removeAll(toDelete);
+        HistoryService.deleteHistoryEntries(toDelete);
     }
 }

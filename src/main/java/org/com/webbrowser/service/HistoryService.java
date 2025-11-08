@@ -136,4 +136,38 @@ public class HistoryService {
 
         return allEntries;
     }
+
+    public static void deleteHistoryEntries(List<HistoryEntry> entriesToDelete) {
+        Integer userId = UserSession.getInstance().getUserId();
+        if (userId == null) return;
+
+        File dir = new File(BASE_DIR);
+        if (!dir.exists()) return;
+
+        File[] files = dir.listFiles((d, name) -> name.startsWith("user_" + userId + "_") && name.endsWith(".json"));
+        if (files == null) return;
+
+        for (File file : files) {
+            try (Reader reader = new FileReader(file)) {
+                Type listType = new TypeToken<List<HistoryRecord>>() {}.getType();
+                List<HistoryRecord> records = gson.fromJson(reader, listType);
+                if (records == null) continue;
+
+                Set<String> urlsToDelete = entriesToDelete.stream()
+                        .map(HistoryEntry::getUrl)
+                        .collect(Collectors.toSet());
+
+                records.removeIf(r -> urlsToDelete.contains(r.getUrl()));
+
+                try (Writer writer = new FileWriter(file)) {
+                    gson.toJson(records, writer);
+                }
+
+            } catch (Exception e) {
+                System.err.println("⚠️ Lỗi khi xóa khỏi file: " + file.getName());
+                e.printStackTrace();
+            }
+        }
+    }
+
 }
