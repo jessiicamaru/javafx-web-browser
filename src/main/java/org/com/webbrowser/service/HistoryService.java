@@ -10,6 +10,8 @@ import org.com.webbrowser.session.UserSession;
 import java.io.*;
 import java.lang.reflect.Type;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.time.temporal.WeekFields;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -31,12 +33,34 @@ public class HistoryService {
         return file;
     }
 
+    private static LocalDateTime parseDate(String isoDate) {
+        if (isoDate == null) return null;
+        try {
+            return LocalDateTime.parse(isoDate);
+        } catch (DateTimeParseException e) {
+            return null;
+        }
+    }
+
+    private static boolean isEntryInCurrentWeek(HistoryEntry entry) {
+        LocalDateTime dt = parseDate(entry.getDate());
+        if (dt == null) return false;
+        LocalDate now = LocalDate.now();
+        WeekFields wf = WeekFields.ISO;
+        int entryWeek = dt.toLocalDate().get(wf.weekOfWeekBasedYear());
+        int entryYear = dt.getYear();
+        int nowWeek = now.get(wf.weekOfWeekBasedYear());
+        int nowYear = now.getYear();
+        return entryYear == nowYear && entryWeek == nowWeek;
+    }
+
     public static List<HistoryEntry> loadHistory() {
         File file = getHistoryFile();
         if (file == null || !file.exists()) return new ArrayList<>();
 
         try (Reader reader = new FileReader(file)) {
-            Type listType = new TypeToken<List<HistoryRecord>>(){}.getType();
+            Type listType = new TypeToken<List<HistoryRecord>>() {
+            }.getType();
             List<HistoryRecord> records = gson.fromJson(reader, listType);
             if (records == null) return new ArrayList<>();
 
@@ -53,7 +77,13 @@ public class HistoryService {
         File file = getHistoryFile();
         if (file == null) return;
 
-        List<HistoryRecord> records = historyEntries.stream()
+        List<HistoryEntry> entriesForCurrentWeek = historyEntries.stream()
+                .filter(Objects::nonNull)
+                .filter(HistoryService::isEntryInCurrentWeek)
+                .map(h -> new HistoryEntry(h.getTitle(), h.getUrl(), h.getDate())) // make safe copy
+                .collect(Collectors.toList());
+
+        List<HistoryRecord> records = entriesForCurrentWeek.stream()
                 .map(HistoryEntry::toRecord)
                 .collect(Collectors.toList());
 
@@ -66,15 +96,13 @@ public class HistoryService {
 
     public static void addHistoryEntry(HistoryEntry entry) {
         List<HistoryEntry> list = loadHistory();
+        list.removeIf(e -> e.getUrl().equalsIgnoreCase(entry.getUrl()));
 
-        boolean exists = list.stream()
-                .anyMatch(h -> h.getUrl() != null && h.getUrl().equals(entry.getUrl()));
+        list.add(0, entry);
 
-        if (!exists) {
-            list.add(entry);
-            saveHistory(list);
-        }
+        saveHistory(list);
     }
+
 
     public static List<HistoryEntry> loadAllHistory() {
         Integer userId = UserSession.getInstance().getUserId();
@@ -90,7 +118,8 @@ public class HistoryService {
 
         for (File file : files) {
             try (Reader reader = new FileReader(file)) {
-                Type listType = new TypeToken<List<HistoryRecord>>(){}.getType();
+                Type listType = new TypeToken<List<HistoryRecord>>() {
+                }.getType();
                 List<HistoryRecord> records = gson.fromJson(reader, listType);
                 if (records != null) {
                     allEntries.addAll(records.stream()
