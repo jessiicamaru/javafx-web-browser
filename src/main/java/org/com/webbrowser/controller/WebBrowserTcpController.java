@@ -289,6 +289,11 @@ public class WebBrowserTcpController implements Initializable {
             try {
                 FXMLLoader loader = new FXMLLoader(WebBrowserApplication.class.getResource("new-tab.fxml"));
                 Parent newTabRoot = loader.load();
+
+                NewTabController newTabController = loader.getController();
+
+                newTabController.setOnUrlOpen(requestedUrl -> loadUrl(tab, requestedUrl, true));
+
                 tab.setContent(newTabRoot);
 
                 TextField searchField = (TextField) newTabRoot.lookup("#searchField");
