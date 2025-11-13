@@ -57,6 +57,10 @@ public class WebBrowserTcpController implements Initializable {
     private Button prevButton;
     @FXML
     private Button closeFindButton;
+    @FXML
+    private Button reloadButton;
+    @FXML
+    private Button stopButton;
 
     private final Map<String, Long> bookmarkIds = new HashMap<>();
     private final Map<Tab, List<String>> history = new HashMap<>();
@@ -67,6 +71,12 @@ public class WebBrowserTcpController implements Initializable {
 
     @Override
     public void initialize(URL location, ResourceBundle resources) {
+        reloadButton.setVisible(true);
+        reloadButton.setManaged(true);
+
+        stopButton.setVisible(false);
+        stopButton.setManaged(false);
+
         addNewTab("newtab");
 
         loadBookmarksFromServer();
@@ -85,6 +95,20 @@ public class WebBrowserTcpController implements Initializable {
         findField.textProperty().addListener((obs, oldText, newText) -> findInPage(newText, true));
         nextButton.setOnAction(e -> findInPage(findField.getText(), true));
         prevButton.setOnAction(e -> findInPage(findField.getText(), false));
+
+        reloadButton.setOnAction(_ -> {
+            Tab tab = getCurrentTab();
+            if (tab != null && tab.getContent() instanceof WebView webView) {
+                webView.getEngine().reload();
+            }
+        });
+
+        stopButton.setOnAction(_ -> {
+            Tab tab = getCurrentTab();
+            if (tab != null && tab.getContent() instanceof WebView webView) {
+                webView.getEngine().getLoadWorker().cancel();
+            }
+        });
 
         new UrlAutoComplete(urlField, globalHistory, bookmarkService, url -> loadUrl(getCurrentTab(), url, true));
 
@@ -290,6 +314,22 @@ public class WebBrowserTcpController implements Initializable {
                 tab.setContent(webView);
                 tab.setUserData(url);
                 urlField.setText(url);
+
+                engine.getLoadWorker().runningProperty().addListener((obs, oldVal, isLoading) -> {
+                    if (isLoading) {
+                        reloadButton.setVisible(false);
+                        reloadButton.setManaged(false);
+
+                        stopButton.setVisible(true);
+                        stopButton.setManaged(true);
+                    } else {
+                        reloadButton.setVisible(true);
+                        reloadButton.setManaged(true);
+
+                        stopButton.setVisible(false);
+                        stopButton.setManaged(false);
+                    }
+                });
 
                 if (url.contains("https://www.google.com/search?q=")) {
                     try {
