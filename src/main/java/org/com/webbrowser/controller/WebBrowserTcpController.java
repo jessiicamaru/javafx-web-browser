@@ -28,6 +28,8 @@ import org.com.webbrowser.service.BookmarkService;
 import org.com.webbrowser.service.HistoryService;
 import org.com.webbrowser.utils.UrlAutoComplete;
 
+import static org.com.webbrowser.utils.UrlNormalizer.normalizeUrl;
+
 public class WebBrowserTcpController implements Initializable {
     @FXML
     private Button backButton;
@@ -84,7 +86,7 @@ public class WebBrowserTcpController implements Initializable {
         nextButton.setOnAction(e -> findInPage(findField.getText(), true));
         prevButton.setOnAction(e -> findInPage(findField.getText(), false));
 
-        new UrlAutoComplete(urlField, globalHistory, url -> loadUrl(getCurrentTab(), url, true));
+        new UrlAutoComplete(urlField, globalHistory, bookmarkService, url -> loadUrl(getCurrentTab(), url, true));
 
         tabPane.getTabs().addListener((javafx.collections.ListChangeListener<Tab>) _ -> {
             if (tabPane.getTabs().isEmpty()) Platform.exit();
@@ -370,27 +372,6 @@ public class WebBrowserTcpController implements Initializable {
     private Tab getCurrentTab() {
         return tabPane.getSelectionModel().getSelectedItem();
     }
-
-    private String normalizeUrl(String input) {
-        if (input == null || input.isEmpty()) return "";
-
-        String lower = input.toLowerCase();
-
-        if (lower.startsWith("http://") || lower.startsWith("https://")) {
-            return input;
-        }
-        if (lower.contains(".") && !lower.contains(" ")) {
-            return "https://" + input;
-        }
-
-        try {
-            String query = java.net.URLEncoder.encode(input, "UTF-8");
-            return "https://www.google.com/search?q=" + query;
-        } catch (Exception e) {
-            return "https://www.google.com/search?q=" + input;
-        }
-    }
-
 
     private void openHistoryWindow() {
         try {

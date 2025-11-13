@@ -1,50 +1,93 @@
 package org.com.webbrowser.utils;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonParser;
 import javafx.application.Platform;
-import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.geometry.Side;
-import javafx.scene.control.ContextMenu;
-import javafx.scene.control.CustomMenuItem;
-import javafx.scene.control.Label;
-import javafx.scene.control.TextField;
+import javafx.scene.control.*;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import org.com.webbrowser.model.HistoryEntry;
-import org.com.webbrowser.service.HistoryService;
+import org.com.webbrowser.service.BookmarkService;
 
-import java.net.URLDecoder;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
+
+import static org.com.webbrowser.utils.UrlNormalizer.normalizeUrl;
 
 public class UrlAutoComplete {
 
     private final TextField textField;
     private final ObservableList<HistoryEntry> history;
     private final ContextMenu suggestionsPopup = new ContextMenu();
-    private int currentIndex = -1;
-    private List<CustomMenuItem> currentItems = new ArrayList<>();
     private final Consumer<String> onSelect;
-    private List<HistoryEntry> cachedList = new ArrayList<>();
+    private final BookmarkService bookmarkService;
+    private final Map<String, Image> iconCache = new HashMap<>();
 
-    public UrlAutoComplete(TextField textField, ObservableList<HistoryEntry> history, Consumer<String> onSelect) {
+    private List<String> bookmarkCache = new ArrayList<>();
+    private List<HistoryEntry> cachedHistory = new ArrayList<>();
+    private List<CustomMenuItem> currentItems = new ArrayList<>();
+    private int currentIndex = -1;
+
+    public UrlAutoComplete(TextField textField,
+                           ObservableList<HistoryEntry> history,
+                           BookmarkService bookmarkService,
+                           Consumer<String> onSelect) {
         this.textField = textField;
         this.history = history;
         this.onSelect = onSelect;
+        this.bookmarkService = bookmarkService;
 
-        rebuildCache(); // load ban đầu
+        loadCache();
         setupListeners();
+    }
 
-        // 🔄 Lắng nghe thay đổi danh sách history để tự refresh
-        history.addListener((ListChangeListener<HistoryEntry>) change -> rebuildCache());
+    private void loadCache() {
+        // cache history
+        cachedHistory = new ArrayList<>(history);
+        Collections.reverse(cachedHistory);
+
+        // cache bookmark
+        CompletableFuture.runAsync(() -> {
+            try {
+                Integer userId = org.com.webbrowser.session.UserSession.getInstance().getUserId();
+                if (userId == null) return;
+
+                String apiUrl = "http://localhost:8080/api/bookmark/get-bookmark?userId=" + userId;
+                HttpURLConnection conn = (HttpURLConnection) new URL(apiUrl).openConnection();
+                conn.setRequestMethod("GET");
+                conn.setRequestProperty("Content-Type", "application/json");
+                if (conn.getResponseCode() == 200) {
+                    String json = new BufferedReader(new InputStreamReader(conn.getInputStream()))
+                            .lines().collect(Collectors.joining());
+                    JsonArray result = JsonParser.parseString(json)
+                            .getAsJsonObject().getAsJsonArray("result");
+                    bookmarkCache = new ArrayList<>();
+                    for (var e : result) {
+                        String url = e.getAsJsonObject().get("url").getAsString();
+                        bookmarkCache.add(url);
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        });
     }
 
     private void setupListeners() {
-        textField.textProperty().addListener((obs, oldValue, newValue) -> {
-            if (newValue == null || newValue.isEmpty()) {
+        textField.textProperty().addListener((obs, oldVal, newVal) -> {
+            if (newVal == null || newVal.isEmpty()) {
                 suggestionsPopup.hide();
             } else {
-                showSuggestions(newValue);
+                showSuggestions(newVal);
             }
         });
 
@@ -54,128 +97,121 @@ public class UrlAutoComplete {
                 case UP -> navigate(-1);
                 case ENTER -> applySelection();
                 case ESCAPE -> suggestionsPopup.hide();
-                default -> {}
+                default -> {
+                }
             }
         });
-
-        // 🔧 Đảm bảo dropdown luôn bằng width của URL field
-        textField.widthProperty().addListener((obs, oldVal, newVal) -> {
-            if (suggestionsPopup.isShowing()) {
-                suggestionsPopup.setMinWidth(newVal.doubleValue());
-                suggestionsPopup.setMaxWidth(newVal.doubleValue());
-            }
-        });
-    }
-
-    /** 🔄 Cập nhật lại cache khi history thay đổi */
-    private void rebuildCache() {
-        // Đảo ngược danh sách: mới nhất nằm trên
-        List<HistoryEntry> reversed = new ArrayList<>(history);
-        Collections.reverse(reversed);
-
-        // Loại bỏ trùng theo URL
-        Map<String, HistoryEntry> uniqueMap = new LinkedHashMap<>();
-        for (HistoryEntry h : reversed) {
-            if (h != null && h.getUrl() != null && !uniqueMap.containsKey(h.getUrl())) {
-                uniqueMap.put(h.getUrl(), h);
-            }
-        }
-        cachedList = new ArrayList<>(uniqueMap.values());
     }
 
     private void showSuggestions(String input) {
         String lower = input.toLowerCase();
 
-        List<HistoryEntry> matches = cachedList.stream()
-                .filter(h -> h.getUrl().toLowerCase().contains(lower)
-                        || (h.getTitle() != null && h.getTitle().toLowerCase().contains(lower)))
-                .limit(8)
-                .collect(Collectors.toList());
+        List<CustomMenuItem> items = new ArrayList<>();
 
-        if (matches.isEmpty()) {
+        // HISTORY
+        cachedHistory.stream()
+                .filter(h -> h.getUrl().toLowerCase().contains(lower))
+                .limit(5)
+                .forEach(h -> items.add(createItem(h.getTitle(), h.getUrl(), "history")));
+
+        // BOOKMARK
+        bookmarkCache.stream()
+                .filter(u -> u.toLowerCase().contains(lower))
+                .limit(3)
+                .forEach(u -> items.add(createItem("⭐ " + u, u, "bookmark")));
+
+        // GOOGLE SEARCH
+        CompletableFuture.supplyAsync(() -> fetchGoogleSuggestions(input))
+                .thenAccept(suggestions -> Platform.runLater(() -> {
+                    for (String s : suggestions.stream().limit(5).toList()) {
+                        items.add(createItem("🔍 " + s, "https://www.google.com/search?q=" + s, "google"));
+                    }
+                    displaySuggestions(items);
+                }));
+    }
+
+    private void displaySuggestions(List<CustomMenuItem> items) {
+        if (items.isEmpty()) {
             suggestionsPopup.hide();
             return;
         }
-
-        List<CustomMenuItem> items = matches.stream().map(entry -> {
-            String display;
-            if (entry.getUrl().contains("google.com/search?q=")) {
-                try {
-                    String query = entry.getUrl().substring(entry.getUrl().indexOf("q=") + 2);
-                    if (query.contains("&")) query = query.substring(0, query.indexOf("&"));
-                    query = URLDecoder.decode(query, StandardCharsets.UTF_8);
-                    display = "Tìm kiếm trên Google - " + query;
-                } catch (Exception e) {
-                    display = "Tìm kiếm trên Google";
-                }
-            } else {
-                String cleanUrl = entry.getUrl().replaceFirst("^https?://", "");
-                display = (entry.getTitle() != null ? entry.getTitle() : cleanUrl) + " - " + cleanUrl;
-            }
-
-            Label label = new Label(display);
-            label.setStyle("-fx-padding: 6 10; -fx-font-size: 13px;");
-            CustomMenuItem item = new CustomMenuItem(label, true);
-            item.setOnAction(e -> applyItem(entry));
-            return item;
-        }).toList();
-
         currentItems = items;
         currentIndex = -1;
 
         suggestionsPopup.getItems().setAll(items);
         suggestionsPopup.setMinWidth(textField.getWidth());
         suggestionsPopup.setMaxWidth(textField.getWidth());
-
         if (!suggestionsPopup.isShowing()) {
             suggestionsPopup.show(textField, Side.BOTTOM, 0, 0);
         }
     }
 
-    private void applyItem(HistoryEntry entry) {
-        Platform.runLater(() -> {
-            String url = entry.getUrl();
+    private CustomMenuItem createItem(String text, String url, String type) {
+        Image icon = iconCache.computeIfAbsent(type, t -> switch (t) {
+            case "bookmark" -> new Image("https://cdn-icons-png.flaticon.com/512/1828/1828884.png", 16, 16, true, true);
+            case "google" -> new Image("https://www.google.com/favicon.ico", 16, 16, true, true);
+            default -> new Image("https://www.google.com/s2/favicons?domain=" + url, 16, 16, true, true);
+        });
+
+        Label label = new Label(text, new ImageView(icon));
+        label.setStyle("-fx-padding: 6 10; -fx-font-size: 13px;");
+        CustomMenuItem item = new CustomMenuItem(label, true);
+        item.setOnAction(_ -> {
             textField.setText(url);
             textField.positionCaret(url.length());
             suggestionsPopup.hide();
-
             onSelect.accept(url);
         });
+        return item;
+    }
+
+    private List<String> fetchGoogleSuggestions(String query) {
+        try {
+            String apiUrl = "https://suggestqueries.google.com/complete/search?client=firefox&q="
+                    + URLEncoder.encode(query, StandardCharsets.UTF_8);
+            HttpURLConnection conn = (HttpURLConnection) new URL(apiUrl).openConnection();
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
+
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
+                String json = reader.lines().collect(Collectors.joining());
+                JsonArray arr = JsonParser.parseString(json).getAsJsonArray();
+                JsonArray suggestArr = arr.get(1).getAsJsonArray();
+
+                List<String> suggestions = new ArrayList<>();
+                for (int i = 0; i < suggestArr.size(); i++) {
+                    suggestions.add(suggestArr.get(i).getAsString());
+                }
+                return suggestions;
+            }
+        } catch (Exception e) {
+            return Collections.emptyList();
+        }
     }
 
     private void navigate(int delta) {
-        if (currentItems == null || currentItems.isEmpty()) return;
-
+        if (currentItems.isEmpty()) return;
         currentIndex = (currentIndex + delta + currentItems.size()) % currentItems.size();
 
         for (int i = 0; i < currentItems.size(); i++) {
             Label lbl = (Label) currentItems.get(i).getContent();
             lbl.setStyle(i == currentIndex
-                    ? "-fx-background-color: -fx-accent; -fx-text-fill: white; -fx-padding: 6 10; -fx-font-size: 13px;"
-                    : "-fx-padding: 6 10; -fx-font-size: 13px;");
+                    ? "-fx-background-color: -fx-accent; -fx-text-fill: white; -fx-padding: 6 10;"
+                    : "-fx-padding: 6 10;");
         }
 
         Label currentLabel = (Label) currentItems.get(currentIndex).getContent();
-        String currentText = currentLabel.getText();
-
-        HistoryEntry entry = cachedList.stream()
-                .filter(h -> currentText.contains(h.getUrl()) || (h.getTitle() != null && currentText.contains(h.getTitle())))
-                .findFirst()
-                .orElse(null);
-
-        if (entry != null) {
-            Platform.runLater(() -> {
-                textField.setText(entry.getUrl());
-                textField.positionCaret(entry.getUrl().length());
-            });
-        }
+        textField.setText(currentLabel.getText().replace("⭐ ", "").replace("🔍 ", ""));
+        textField.positionCaret(textField.getText().length());
     }
 
     private void applySelection() {
-        if (currentItems != null && currentIndex >= 0 && currentIndex < currentItems.size()) {
+        if (currentIndex >= 0 && currentIndex < currentItems.size()) {
             currentItems.get(currentIndex).fire();
         } else {
             suggestionsPopup.hide();
+            String normalized = normalizeUrl(textField.getText());
+            onSelect.accept(normalized);
         }
     }
+
 }
