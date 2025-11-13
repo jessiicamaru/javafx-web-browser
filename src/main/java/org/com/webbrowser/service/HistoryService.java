@@ -105,6 +105,8 @@ public class HistoryService {
 
 
     public static List<HistoryEntry> loadAllHistory() {
+        cleanupOldHistoryFiles();
+
         Integer userId = UserSession.getInstance().getUserId();
         if (userId == null) return new ArrayList<>();
 
@@ -170,4 +172,46 @@ public class HistoryService {
         }
     }
 
+    private static void cleanupOldHistoryFiles() {
+        Integer userId = UserSession.getInstance().getUserId();
+        if (userId == null) return;
+
+        File dir = new File(BASE_DIR);
+        if (!dir.exists() || !dir.isDirectory()) return;
+
+        LocalDate now = LocalDate.now();
+        WeekFields wf = WeekFields.ISO;
+        int currentWeek = now.get(wf.weekOfWeekBasedYear());
+        int currentYear = now.getYear();
+
+        File[] files = dir.listFiles((d, name) ->
+                name.startsWith("user_" + userId + "_") && name.endsWith(".json"));
+        if (files == null) return;
+
+        for (File file : files) {
+            String name = file.getName();
+            try {
+                // ví dụ: user_1_2025-week43.json
+                String[] parts = name.split("_");
+                String yearPart = parts[2]; // "2025-week43.json"
+                String[] ySplit = yearPart.split("-week");
+                int year = Integer.parseInt(ySplit[0]);
+                int week = Integer.parseInt(ySplit[1].replace(".json", ""));
+
+                boolean isOld = false;
+                if (year < currentYear) {
+                    isOld = true; // năm cũ hơn
+                } else if (year == currentYear && currentWeek - week > 4) {
+                    isOld = true; // cùng năm nhưng cách quá 4 tuần
+                }
+
+                if (isOld && file.delete()) {
+                    System.out.println("🧹 Đã xóa file history cũ: " + file.getName());
+                }
+
+            } catch (Exception e) {
+                System.err.println("⚠️ Không thể phân tích hoặc xóa file: " + name);
+            }
+        }
+    }
 }
