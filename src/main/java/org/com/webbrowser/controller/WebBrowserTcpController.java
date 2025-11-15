@@ -138,6 +138,34 @@ public class WebBrowserTcpController implements Initializable {
                         event.consume();
                     }
                 });
+
+                double[] zoomValue = {1.0};
+
+                newScene.addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, event -> {
+
+                    Tab currentTab = getCurrentTab();
+                    if (currentTab != null && currentTab.getContent() instanceof WebView webView) {
+
+                        if (event.isControlDown() && event.getCode() == KeyCode.EQUALS) {
+                            zoomValue[0] += 0.1;
+                            webView.setZoom(zoomValue[0]);
+                            event.consume();
+                        }
+
+                        if (event.isControlDown() && event.getCode() == KeyCode.MINUS) {
+                            zoomValue[0] -= 0.1;
+                            if (zoomValue[0] < 0.3) zoomValue[0] = 0.3;
+                            webView.setZoom(zoomValue[0]);
+                            event.consume();
+                        }
+
+                        if (event.isControlDown() && event.getCode() == KeyCode.DIGIT0) {
+                            zoomValue[0] = 1.0;
+                            webView.setZoom(zoomValue[0]);
+                            event.consume();
+                        }
+                    }
+                });
             }
         });
 
