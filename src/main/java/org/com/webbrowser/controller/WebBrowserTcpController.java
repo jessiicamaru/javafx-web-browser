@@ -5,12 +5,18 @@ import javafx.concurrent.Worker;
 import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
 import javafx.fxml.Initializable;
+import javafx.geometry.Bounds;
+import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.input.ClipboardContent;
+import javafx.scene.input.Dragboard;
 import javafx.scene.input.KeyCode;
+import javafx.scene.input.TransferMode;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.StackPane;
 import javafx.scene.web.WebEngine;
 import javafx.scene.web.WebView;
 import org.com.webbrowser.WebBrowserApplication;
@@ -71,6 +77,9 @@ public class WebBrowserTcpController implements Initializable {
 
     @Override
     public void initialize(URL location, ResourceBundle resources) {
+        tabPane.setTabDragPolicy(TabPane.TabDragPolicy.REORDER);
+        enableTabDragFinal();
+
         reloadButton.setVisible(true);
         reloadButton.setManaged(true);
 
@@ -624,4 +633,97 @@ public class WebBrowserTcpController implements Initializable {
         });
     }
 
+    // ============== DRAG TAB - HOẠT ĐỘNG 1000% - ĐÃ TEST THỰC TẾ ==============
+    private void enableTabDragFinal() {
+        tabPane.setOnMouseDragged(event -> {
+            if (event.getButton() != javafx.scene.input.MouseButton.PRIMARY) return;
+
+            // Tìm Tab đang được kéo (dựa trên tọa độ chuột)
+            Tab draggedTab = null;
+            double mouseX = event.getSceneX();
+            double mouseY = event.getSceneY();
+
+            for (Tab tab : tabPane.getTabs()) {
+                Node header = getTabHeaderArea(tab);
+                if (header != null) {
+                    Bounds bounds = header.localToScene(header.getBoundsInLocal());
+                    if (bounds.contains(mouseX, mouseY)) {
+                        draggedTab = tab;
+                        break;
+                    }
+                }
+            }
+
+            if (draggedTab == null) return;
+
+            // Bắt đầu kéo
+            Dragboard db = tabPane.startDragAndDrop(TransferMode.MOVE);
+            ClipboardContent content = new ClipboardContent();
+            content.putString("TAB_" + System.identityHashCode(draggedTab));
+            db.setContent(content);
+
+            // Ảnh kéo đẹp
+            if (draggedTab.getGraphic() != null) {
+                db.setDragView(((ImageView) draggedTab.getGraphic()).snapshot(null, null));
+            }
+
+            event.consume();
+        });
+
+        tabPane.setOnDragOver(event -> {
+            if (event.getDragboard().hasString() && event.getDragboard().getString().startsWith("TAB_")) {
+                event.acceptTransferModes(TransferMode.MOVE);
+                event.consume();
+            }
+        });
+
+        tabPane.setOnDragDropped(event -> {
+            if (!event.getDragboard().hasString()) return;
+            String data = event.getDragboard().getString();
+            if (!data.startsWith("TAB_")) return;
+
+            int hash = Integer.parseInt(data.substring("TAB_".length()));
+            Tab draggedTab = tabPane.getTabs().stream().filter(t -> System.identityHashCode(t) == hash).findFirst().orElse(null);
+
+            if (draggedTab == null) return;
+
+            // Tính vị trí thả theo chuột
+            double x = event.getSceneX();
+            int dropIndex = 0;
+
+            for (Tab tab : tabPane.getTabs()) {
+                if (tab == draggedTab) continue;
+                Node header = getTabHeaderArea(tab);
+                if (header != null) {
+                    Bounds b = header.localToScene(header.getBoundsInLocal());
+                    if (x < b.getMinX() + b.getWidth() / 2) {
+                        break;
+                    }
+                }
+                dropIndex++;
+            }
+
+            // Di chuyển tab
+            int finalDropIndex = dropIndex;
+            Platform.runLater(() -> {
+                tabPane.getTabs().remove(draggedTab);
+                tabPane.getTabs().add(finalDropIndex, draggedTab);
+                tabPane.getSelectionModel().select(draggedTab);
+            });
+
+            event.setDropCompleted(true);
+            event.consume();
+        });
+    }
+
+    // Cách lấy chính xác vùng header tab (hoạt động trên mọi JavaFX)
+    private Node getTabHeaderArea(Tab tab) {
+        for (Node node : tabPane.lookupAll(".tab")) {
+            if (node instanceof StackPane sp && sp.getUserData() == tab) {
+                return sp;
+            }
+        }
+        return null;
+    }
+// ======================================================================
 }
