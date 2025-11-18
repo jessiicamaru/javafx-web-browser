@@ -425,7 +425,12 @@ public class WebBrowserTcpController implements Initializable {
         if (idx > 0) {
             historyIndex.put(tab, idx - 1);
             String prevUrl = history.get(tab).get(idx - 1);
-            ((WebView) tab.getContent()).getEngine().load(prevUrl);
+
+            WebView webView = (WebView) tab.getContent();
+            WebEngine engine = webView.getEngine();
+
+            updateTabTitleAndIcon(tab, engine, prevUrl);
+            engine.load(prevUrl);
         }
     }
 
@@ -438,7 +443,12 @@ public class WebBrowserTcpController implements Initializable {
         if (idx < urls.size() - 1) {
             historyIndex.put(tab, idx + 1);
             String nextUrl = urls.get(idx + 1);
-            ((WebView) tab.getContent()).getEngine().load(nextUrl);
+
+            WebView webView = (WebView) tab.getContent();
+            WebEngine engine = webView.getEngine();
+
+            updateTabTitleAndIcon(tab, engine, nextUrl);
+            engine.load(nextUrl);
         }
     }
 
@@ -586,6 +596,32 @@ public class WebBrowserTcpController implements Initializable {
         } catch (Exception e) {
             System.err.println("❌ Lỗi favicon: " + e.getMessage());
         }
+    }
+
+    private void updateTabTitleAndIcon(Tab tab, WebEngine engine, String url) {
+        engine.getLoadWorker().stateProperty().addListener((obs, oldState, newState) -> {
+            if (newState == Worker.State.SUCCEEDED) {
+                String title = engine.getTitle() != null ? engine.getTitle() : url;
+
+                if (url.contains("https://www.google.com/search?q=")) {
+                    try {
+                        String query = url.substring(url.indexOf("q=") + 2);
+                        if (query.contains("&")) {
+                            query = query.substring(0, query.indexOf("&"));
+                        }
+                        query = java.net.URLDecoder.decode(query, "UTF-8");
+
+                        tab.setText(query + " - Tìm kiếm trên Google");
+                    } catch (Exception e) {
+                        tab.setText("Tìm kiếm trên Google");
+                    }
+                } else {
+                    tab.setText(title);
+                }
+
+                setTabFavicon(tab, url);
+            }
+        });
     }
 
 }
