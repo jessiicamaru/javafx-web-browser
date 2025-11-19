@@ -1,5 +1,6 @@
 package org.com.webbrowser.controller;
 
+import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.geometry.Pos;
 import javafx.scene.control.*;
@@ -32,6 +33,12 @@ public class NewTabController {
         shortcutService.getShortcuts(userId, this::renderShortcuts);
 
         searchField.setOnAction(e -> handleSearch());
+
+        searchField.setFocusTraversable(false);
+
+        searchField.setOnMouseClicked(e -> {
+            Platform.runLater(() -> searchField.requestFocus());
+        });
     }
 
     private void handleSearch() {
