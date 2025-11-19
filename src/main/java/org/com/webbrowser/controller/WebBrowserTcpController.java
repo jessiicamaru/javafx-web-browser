@@ -1,22 +1,25 @@
 package org.com.webbrowser.controller;
 
 import javafx.application.Platform;
+import javafx.collections.ListChangeListener;
 import javafx.concurrent.Worker;
 import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
 import javafx.fxml.Initializable;
 import javafx.geometry.Bounds;
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
-import javafx.scene.input.ClipboardContent;
-import javafx.scene.input.Dragboard;
-import javafx.scene.input.KeyCode;
-import javafx.scene.input.TransferMode;
+import javafx.scene.input.*;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
+import javafx.scene.paint.Color;
+import javafx.scene.shape.Circle;
 import javafx.scene.web.WebEngine;
 import javafx.scene.web.WebView;
 import org.com.webbrowser.WebBrowserApplication;
@@ -75,10 +78,212 @@ public class WebBrowserTcpController implements Initializable {
     private final BookmarkService bookmarkService = new BookmarkService();
     private final Map<String, Image> faviconCache = new HashMap<>();
 
+    private final List<TabGroup> tabGroups = new ArrayList<>();
+    private final List<Tab> looseTabs = new ArrayList<>();
+    private final Map<Tab, TabGroup> headerToGroup = new HashMap<>();
+    private final Map<Tab, TabGroup> tabToGroup = new HashMap<>();
+
+    private final List<Tab> tabOrder = new ArrayList<>();
+    private final Map<Tab, Integer> tabPriority = new HashMap<>();
+
+    private class TabGroup {
+        String name;
+        Color color;
+        boolean collapsed = false;
+        final List<Tab> tabs = new ArrayList<>();
+        Tab headerTab = new Tab();
+
+        TabGroup(String name, Color color) {
+            this.name = name;
+            this.color = color == null ? generateRandomColor() : color;
+
+            headerTab = new Tab();
+            headerTab.setClosable(false);
+            updateHeaderGraphic();
+            headerToGroup.put(headerTab, this);
+
+            // DÙNG CÁCH NÀY ĐỂ BẮT CLICK VÀO HEADER TAB GROUP
+            headerTab.graphicProperty().addListener((obs, oldGraphic, newGraphic) -> {
+                if (newGraphic instanceof Region region) {
+                    region.setOnMouseClicked(e -> {
+                        if (e.getButton() == MouseButton.PRIMARY && e.getClickCount() == 1) {
+                            collapsed = !collapsed;
+                            updateHeaderGraphic();
+                            rebuildTabOrder();
+                            e.consume();
+                        }
+                    });
+                }
+            });
+
+            // Đảm bảo lần đầu cũng có listener
+            if (headerTab.getGraphic() instanceof Region region) {
+                region.setOnMouseClicked(e -> {
+                    if (e.getButton() == MouseButton.PRIMARY && e.getClickCount() == 1) {
+                        collapsed = !collapsed;
+                        updateHeaderGraphic();
+                        rebuildTabOrder();
+                        e.consume();
+                    }
+                });
+            }
+
+            setupGroupContextMenu();
+        }
+
+        void updateHeaderGraphic() {
+            int r = (int) (color.getRed() * 255);
+            int g = (int) (color.getGreen() * 255);
+            int b = (int) (color.getBlue() * 255);
+
+            Circle circle = new Circle(8, color);
+            Label label = new Label(collapsed ? name : name + " (" + tabs.size() + ")");
+            label.setStyle("-fx-text-fill: white; -fx-font-weight: bold; -fx-font-size: 11;");
+
+            HBox badge = new HBox(6, circle, label);
+            badge.setAlignment(Pos.CENTER);
+            badge.setPadding(new Insets(6, 12, 6, 12));
+            badge.setStyle("-fx-background-color: rgb(" + r + "," + g + "," + b + "); " +
+                    "-fx-background-radius: 16; " +
+                    "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.3), 3, 0, 0, 1);");
+
+            // Bắt click vào badge để toggle collapse
+            badge.setOnMouseClicked(e -> {
+                if (e.getButton() == MouseButton.PRIMARY && e.getClickCount() == 1) {
+                    collapsed = !collapsed;
+                    updateHeaderGraphic();
+                    rebuildTabOrder();
+                    e.consume();
+                }
+            });
+
+            if (collapsed) {
+                headerTab.setGraphic(badge);
+            } else {
+                Label separator = new Label("   ");
+                separator.setStyle("-fx-background-color: transparent;");
+                HBox fullHeader = new HBox(badge, separator);
+                fullHeader.setAlignment(Pos.CENTER_LEFT);
+                headerTab.setGraphic(fullHeader);
+            }
+        }
+
+        void addTab(Tab tab) {
+            if (!tabs.contains(tab)) {
+                tabs.add(tab);
+                tabToGroup.put(tab, this);
+                int r = (int) (color.getRed() * 255);
+                int g = (int) (color.getGreen() * 255);
+                int b = (int) (color.getBlue() * 255);
+                tab.setStyle("-fx-background-color: rgba(" + r + "," + g + "," + b + ", 0.15);");
+                setupTabCloseHandler(tab);
+                rebuildTabOrder();
+
+                updateHeaderGraphic();
+            }
+        }
+
+        void removeTab(Tab tab) {
+            if (tabs.remove(tab)) {
+                tabToGroup.remove(tab);
+                tab.setStyle(null);  // reset màu
+
+                // === QUAN TRỌNG NHẤT: KHÔNG ĐƯỢC XÓA KHỎI tabPane.getTabs() Ở ĐÂY NỮA ===
+                // Vì rebuildTabOrder() sẽ tự xử lý việc render lại toàn bộ → nếu xóa trước thì sẽ duplicate!
+
+                looseTabs.add(tab);  // chỉ add vào looseTabs là đủ
+
+                updateHeaderGraphic();
+
+                if (tabs.isEmpty()) {
+                    headerToGroup.remove(headerTab);
+                    tabGroups.remove(this);
+                    // headerTab sẽ tự bị xóa trong rebuildTabOrder()
+                }
+
+                rebuildTabOrder(); // ← ĐÂY MỚI LÀ NƠI DUY NHẤT ĐƯỢC PHÉP THAY ĐỔI tabPane.getTabs()
+            }
+        }
+
+        void setupGroupContextMenu() {
+            ContextMenu menu = new ContextMenu();
+
+            MenuItem rename = new MenuItem("Rename Group");
+            rename.setOnAction(e -> {
+                TextInputDialog d = new TextInputDialog(name);
+                d.setTitle("Rename Group");
+                d.setHeaderText("New name:");
+                d.showAndWait().ifPresent(n -> {
+                    if (!n.trim().isEmpty()) {
+                        name = n.trim();
+                        updateHeaderGraphic();
+                    }
+                });
+            });
+
+            MenuItem changeColor = new MenuItem("Change Color");
+            changeColor.setOnAction(e -> {
+                color = generateRandomColor();
+                updateHeaderGraphic();
+                for (Tab t : tabs) {
+                    int rr = (int)(color.getRed()*255);
+                    int gg = (int)(color.getGreen()*255);
+                    int bb = (int)(color.getBlue()*255);
+                    t.setStyle("-fx-background-color: rgba(" + rr + "," + gg + "," + bb + ", 0.15);");
+                }
+            });
+
+            MenuItem toggle = new MenuItem(collapsed ? "Expand Group" : "Collapse Group");
+            toggle.setOnAction(e -> {
+                collapsed = !collapsed;
+                updateHeaderGraphic();
+                rebuildTabOrder();
+            });
+
+            MenuItem ungroup = new MenuItem("Ungroup");
+            ungroup.setOnAction(e -> {
+                looseTabs.addAll(tabs);
+                for (Tab t : tabs) {
+                    t.setStyle(null);
+                    tabToGroup.remove(t);
+                }
+                tabs.clear();
+                headerToGroup.remove(headerTab);
+                tabGroups.remove(this);
+                rebuildTabOrder();
+            });
+
+            MenuItem delete = new MenuItem("Delete Group (close all tabs)");
+            delete.setOnAction(e -> {
+                tabs.forEach(t -> {
+                    history.remove(t);
+                    historyIndex.remove(t);
+                });
+                tabs.clear();
+                tabPane.getTabs().remove(headerTab);
+                headerToGroup.remove(headerTab);
+                tabGroups.remove(this);
+                rebuildTabOrder();
+            });
+
+            menu.getItems().addAll(rename, changeColor, toggle, ungroup, delete);
+            headerTab.setContextMenu(menu);
+        }
+    }
+
+    private Color generateRandomColor() {
+        Random r = new Random();
+        return Color.hsb(r.nextDouble() * 360, 0.6, 0.95);
+    }
+
     @Override
     public void initialize(URL location, ResourceBundle resources) {
         tabPane.setTabDragPolicy(TabPane.TabDragPolicy.REORDER);
         enableTabDragFinal();
+
+        looseTabs.clear();
+        tabGroups.clear();
+        rebuildTabOrder();
 
         reloadButton.setVisible(true);
         reloadButton.setManaged(true);
@@ -121,8 +326,11 @@ public class WebBrowserTcpController implements Initializable {
 
         new UrlAutoComplete(urlField, globalHistory, bookmarkService, url -> loadUrl(getCurrentTab(), url, true));
 
-        tabPane.getTabs().addListener((javafx.collections.ListChangeListener<Tab>) _ -> {
-            if (tabPane.getTabs().isEmpty()) Platform.exit();
+        tabPane.getTabs().addListener((ListChangeListener<Tab>) c -> {
+            long realTabCount = looseTabs.size() + tabGroups.stream().mapToLong(g -> g.tabs.size()).sum();
+            if (realTabCount == 0) {
+                Platform.exit();
+            }
         });
 
         tabPane.sceneProperty().addListener((obs, oldScene, newScene) -> {
@@ -184,6 +392,7 @@ public class WebBrowserTcpController implements Initializable {
             else urlField.setText((String) newTab.getUserData());
         });
 
+
         tabPane.sceneProperty().addListener((obs, oldScene, newScene) -> {
             if (newScene != null) {
                 newScene.addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, event -> {
@@ -200,7 +409,7 @@ public class WebBrowserTcpController implements Initializable {
                     if (event.isControlDown() && event.getCode() == javafx.scene.input.KeyCode.W) {
                         Tab currentTab = getCurrentTab();
                         if (currentTab != null) {
-                            tabPane.getTabs().remove(currentTab);
+                            closeTab(currentTab);
                             event.consume();
                         }
                     }
@@ -316,31 +525,38 @@ public class WebBrowserTcpController implements Initializable {
 
     private void addNewTab(String url) {
         Tab tab = new Tab("New Tab");
-        tabPane.getTabs().add(tab);
-        tabPane.getSelectionModel().select(tab);
+
+        setupTabContextMenu(tab);
+        setupTabCloseHandler(tab);
 
         history.put(tab, new ArrayList<>());
         historyIndex.put(tab, -1);
 
+        // Load nội dung (new tab page hoặc URL)
         if (url.equals("newtab")) {
             try {
                 FXMLLoader loader = new FXMLLoader(WebBrowserApplication.class.getResource("new-tab.fxml"));
                 Parent newTabRoot = loader.load();
-
                 NewTabController newTabController = loader.getController();
-
                 newTabController.setOnUrlOpen(requestedUrl -> loadUrl(tab, requestedUrl, true));
-
                 tab.setContent(newTabRoot);
 
                 TextField searchField = (TextField) newTabRoot.lookup("#searchField");
-                searchField.setOnAction(_ -> loadUrl(tab, searchField.getText(), true));
+                if (searchField != null) {
+                    searchField.setOnAction(_ -> loadUrl(tab, searchField.getText(), true));
+                }
             } catch (IOException ex) {
                 tab.setContent(new Label("Error loading new tab page"));
+                ex.printStackTrace();
             }
         } else {
             loadUrl(tab, url, true);
         }
+
+        looseTabs.add(tab);
+        rebuildTabOrder();
+
+        tabPane.getSelectionModel().select(tab);
     }
 
     private void loadUrl(Tab tab, String input, boolean addToHistory) {
@@ -475,8 +691,11 @@ public class WebBrowserTcpController implements Initializable {
 
             Tab historyTab = new Tab("History");
             historyTab.setContent(root);
+            setupTabContextMenu(historyTab);
+            setupTabCloseHandler(historyTab);
 
-            tabPane.getTabs().add(historyTab);
+            looseTabs.add(historyTab);
+            rebuildTabOrder();
             tabPane.getSelectionModel().select(historyTab);
 
         } catch (IOException e) {
@@ -633,12 +852,10 @@ public class WebBrowserTcpController implements Initializable {
         });
     }
 
-    // ============== DRAG TAB - HOẠT ĐỘNG 1000% - ĐÃ TEST THỰC TẾ ==============
     private void enableTabDragFinal() {
         tabPane.setOnMouseDragged(event -> {
             if (event.getButton() != javafx.scene.input.MouseButton.PRIMARY) return;
 
-            // Tìm Tab đang được kéo (dựa trên tọa độ chuột)
             Tab draggedTab = null;
             double mouseX = event.getSceneX();
             double mouseY = event.getSceneY();
@@ -656,13 +873,11 @@ public class WebBrowserTcpController implements Initializable {
 
             if (draggedTab == null) return;
 
-            // Bắt đầu kéo
             Dragboard db = tabPane.startDragAndDrop(TransferMode.MOVE);
             ClipboardContent content = new ClipboardContent();
             content.putString("TAB_" + System.identityHashCode(draggedTab));
             db.setContent(content);
 
-            // Ảnh kéo đẹp
             if (draggedTab.getGraphic() != null) {
                 db.setDragView(((ImageView) draggedTab.getGraphic()).snapshot(null, null));
             }
@@ -689,6 +904,7 @@ public class WebBrowserTcpController implements Initializable {
 
             // Tính vị trí thả theo chuột
             double x = event.getSceneX();
+            double y = event.getSceneY();
             int dropIndex = 0;
 
             for (Tab tab : tabPane.getTabs()) {
@@ -706,17 +922,87 @@ public class WebBrowserTcpController implements Initializable {
             // Di chuyển tab
             int finalDropIndex = dropIndex;
             Platform.runLater(() -> {
+                int oldIndex = tabPane.getTabs().indexOf(draggedTab);
                 tabPane.getTabs().remove(draggedTab);
-                tabPane.getTabs().add(finalDropIndex, draggedTab);
+
+                int newIndex = finalDropIndex;
+                if (oldIndex < newIndex) newIndex--;
+
+                // === TÍNH TOÁN NẾU KÉO VÀO TRONG GROUP ===
+                Tab targetTab = null;
+                for (Tab t : tabPane.getTabs()) {
+                    if (t == draggedTab) continue;
+                    Node header = getTabHeaderArea(t);
+                    if (header != null) {
+                        Bounds b = header.localToScene(header.getBoundsInLocal());
+                        if (x >= b.getMinX() && x <= b.getMaxX() &&
+                                y >= b.getMinY() && y <= b.getMaxY()) {
+                            targetTab = t;
+                            break;
+                        }
+                    }
+                }
+
+// Nếu thả vào header của group → tự động add vào group đó
+                if (targetTab != null && headerToGroup.containsKey(targetTab)) {
+                    TabGroup targetGroup = headerToGroup.get(targetTab);
+
+                    // Xóa tab khỏi vị trí cũ (group cũ hoặc loose)
+                    TabGroup oldGroup = tabToGroup.get(draggedTab);
+                    if (oldGroup != null) {
+                        oldGroup.removeTab(draggedTab);
+                    } else {
+                        looseTabs.remove(draggedTab);
+                        tabPane.getTabs().remove(draggedTab);
+                    }
+
+                    // Thêm vào group mới
+                    targetGroup.addTab(draggedTab);
+
+                    // Expand group nếu đang collapse (giống Chrome)
+                    if (targetGroup.collapsed) {
+                        targetGroup.collapsed = false;
+                        targetGroup.updateHeaderGraphic();
+                    }
+
+                    tabPane.getSelectionModel().select(draggedTab);
+
+                    List<TabGroup> newGroupOrder = new ArrayList<>();
+                    for (Tab t : tabPane.getTabs()) {
+                        if (headerToGroup.containsKey(t)) {
+                            newGroupOrder.add(headerToGroup.get(t));
+                        }
+                    }
+                    tabGroups.clear();
+                    tabGroups.addAll(newGroupOrder);
+                    rebuildTabOrder();
+
+                    event.setDropCompleted(true);
+                    event.consume();
+                    return; // ← QUAN TRỌNG: thoát luôn, không xử lý reorder bình thường
+                }
+
+                if (headerToGroup.containsKey(draggedTab)) {
+                    TabGroup group = headerToGroup.get(draggedTab);
+                    List<Tab> block = new ArrayList<>();
+                    block.add(group.headerTab);
+                    if (!group.collapsed) block.addAll(group.tabs);
+
+                    tabPane.getTabs().removeAll(block);
+                    if (oldIndex < finalDropIndex) newIndex -= block.size();
+
+                    tabPane.getTabs().addAll(newIndex, block);
+                } else {
+                    tabPane.getTabs().add(newIndex, draggedTab);
+                }
+
                 tabPane.getSelectionModel().select(draggedTab);
             });
-
             event.setDropCompleted(true);
             event.consume();
         });
     }
 
-    // Cách lấy chính xác vùng header tab (hoạt động trên mọi JavaFX)
     private Node getTabHeaderArea(Tab tab) {
         for (Node node : tabPane.lookupAll(".tab")) {
             if (node instanceof StackPane sp && sp.getUserData() == tab) {
@@ -725,5 +1011,138 @@ public class WebBrowserTcpController implements Initializable {
         }
         return null;
     }
-// ======================================================================
+
+    private void rebuildTabOrder() {
+        Tab selected = getCurrentTab();
+
+        // Tắt tạm để không chớp
+        tabPane.setDisable(true);
+
+        tabPane.getTabs().clear();
+
+        // Xây dựng lại đúng thứ tự
+        for (TabGroup group : tabGroups) {
+            tabPane.getTabs().add(group.headerTab);
+            if (!group.collapsed) {
+                tabPane.getTabs().addAll(group.tabs);
+            }
+        }
+        tabPane.getTabs().addAll(looseTabs);
+
+        // === QUAN TRỌNG NHẤT: CẬP NHẬT tabOrder MỖI LẦN REBUILD ===
+        tabOrder.clear();
+        tabOrder.addAll(
+                tabPane.getTabs().stream()
+                        .filter(t -> !headerToGroup.containsKey(t))  // chỉ lưu tab thật, không lưu header
+                        .toList()
+        );
+
+        // Khôi phục tab đang chọn
+        if (selected != null && tabPane.getTabs().contains(selected)) {
+            tabPane.getSelectionModel().select(selected);
+        } else if (!tabPane.getTabs().isEmpty()) {
+            tabPane.getSelectionModel().select(tabPane.getTabs().size() - 1); // tab mới nhất nếu mất selected
+        }
+
+        // Bật lại – mượt như Chrome
+        Platform.runLater(() -> tabPane.setDisable(false));
+    }
+
+    private void setupTabContextMenu(Tab tab) {
+        ContextMenu cm = new ContextMenu();
+
+        MenuItem newGroup = new MenuItem("New Tab Group");
+        newGroup.setOnAction(e -> createTabGroup(tab));
+
+        Menu addToMenu = new Menu("Add to Group");
+        cm.setOnShowing(e -> {
+            addToMenu.getItems().clear();
+            for (TabGroup g : tabGroups) {
+                MenuItem mi = new MenuItem(g.name);
+                mi.setOnAction(ev -> {
+                    TabGroup oldGroup = tabToGroup.get(tab);
+                    if (oldGroup != null) oldGroup.removeTab(tab);
+                    else looseTabs.remove(tab);
+                    g.addTab(tab);
+                    rebuildTabOrder();
+                });
+                addToMenu.getItems().add(mi);
+            }
+        });
+
+        MenuItem removeFromGroup = new MenuItem("Remove from Group");
+        removeFromGroup.setOnAction(e -> {
+            TabGroup g = tabToGroup.get(tab);
+            if (g != null) {
+                g.removeTab(tab);
+            }
+        });
+
+        cm.getItems().addAll(newGroup, addToMenu, removeFromGroup);
+        tab.setContextMenu(cm);
+    }
+
+    private void createTabGroup(Tab tab) {
+        TextInputDialog dialog = new TextInputDialog("My Group");
+        dialog.setTitle("Create Tab Group");
+        dialog.setHeaderText("Group name:");
+        dialog.showAndWait().ifPresent(name -> {
+            if (!name.trim().isEmpty()) {
+                TabGroup group = new TabGroup(name.trim(), null); // random color
+                // xóa khỏi vị trí cũ
+                TabGroup old = tabToGroup.get(tab);
+                if (old != null) old.removeTab(tab);
+                else looseTabs.remove(tab);
+
+                group.addTab(tab);
+                tabGroups.add(group);
+                rebuildTabOrder();
+                tabPane.getSelectionModel().select(tab);
+            }
+        });
+    }
+
+    private void setupTabCloseHandler(Tab tab) {
+        // Không cho đóng header group bằng nút X
+        if (headerToGroup.containsKey(tab)) {
+            tab.setClosable(false);
+            return;
+        }
+
+        tab.setOnCloseRequest(e -> {
+            TabGroup group = tabToGroup.get(tab);
+            if (group != null) {
+                group.removeTab(tab);
+            } else {
+                looseTabs.remove(tab);
+            }
+
+            history.remove(tab);
+            historyIndex.remove(tab);
+
+            rebuildTabOrder();
+            e.consume(); // quan trọng: ngăn JavaFX tự remove tab (tránh double remove)
+        });
+    }
+
+    private void closeTab(Tab tab) {
+        if (tab == null || headerToGroup.containsKey(tab)) return;
+
+        TabGroup group = tabToGroup.get(tab);
+        if (group != null) {
+            group.removeTab(tab);
+            if (group.tabs.isEmpty()) {
+                tabPane.getTabs().remove(group.headerTab);
+                tabGroups.remove(group);
+                headerToGroup.remove(group.headerTab);
+            }
+        } else {
+            looseTabs.remove(tab);
+        }
+
+        tabPane.getTabs().remove(tabPane.getTabs().indexOf(tab));
+        history.remove(tab);
+        historyIndex.remove(tab);
+        tabToGroup.remove(tab);
+    }
 }
