@@ -386,9 +386,26 @@ public class WebBrowserTcpController implements Initializable {
         });
 
 
-        tabPane.getSelectionModel().selectedItemProperty().addListener((_, _, newTab) -> {
-            if (newTab == null) urlField.clear();
-            else urlField.setText((String) newTab.getUserData());
+        tabPane.getSelectionModel().selectedItemProperty().addListener((obs, oldTab, newTab) -> {
+            if (newTab == null) {
+                urlField.clear();
+                return;
+            }
+
+            Node content = newTab.getContent();
+            boolean isNewTabPage = content != null &&
+                    content.getClass().getSimpleName().contains("BorderPane") && // new-tab.fxml là BorderPane
+                    content.lookup("#searchField") != null; // có searchField → chắc chắn là New Tab
+
+            if (isNewTabPage) {
+                urlField.clear();
+            } else {
+                String url = (String) newTab.getUserData();
+                if (url != null && !url.equals(urlField.getText())) {
+                    urlField.setText(url);
+                    urlField.positionCaret(url.length());
+                }
+            }
         });
 
 
@@ -540,8 +557,26 @@ public class WebBrowserTcpController implements Initializable {
                 newTabController.setOnUrlOpen(requestedUrl -> loadUrl(tab, requestedUrl, true));
                 tab.setContent(newTabRoot);
 
+                newTabRoot.setFocusTraversable(false);
+
                 TextField searchField = (TextField) newTabRoot.lookup("#searchField");
                 if (searchField != null) {
+                    searchField.setFocusTraversable(false);
+
+                    searchField.setOnMouseClicked(e -> {
+                        Platform.runLater(() -> {
+                            searchField.setFocusTraversable(true);
+                            searchField.requestFocus();
+                            searchField.selectAll();
+                        });
+                    });
+
+                    searchField.focusedProperty().addListener((obs, wasFocused, isNowFocused) -> {
+                        if (!isNowFocused) {
+                            searchField.setFocusTraversable(false);
+                        }
+                    });
+
                     searchField.setOnAction(_ -> loadUrl(tab, searchField.getText(), true));
                 }
             } catch (IOException ex) {
