@@ -84,7 +84,6 @@ public class WebBrowserTcpController implements Initializable {
     private final Map<Tab, TabGroup> tabToGroup = new HashMap<>();
 
     private final List<Tab> tabOrder = new ArrayList<>();
-    private final Map<Tab, Integer> tabPriority = new HashMap<>();
 
     private class TabGroup {
         String name;
@@ -1103,25 +1102,35 @@ public class WebBrowserTcpController implements Initializable {
     }
 
     private void setupTabCloseHandler(Tab tab) {
-        // Không cho đóng header group bằng nút X
         if (headerToGroup.containsKey(tab)) {
             tab.setClosable(false);
             return;
         }
 
         tab.setOnCloseRequest(e -> {
+            // === ĐÓNG THẬT – KILL TAB HOÀN TOÀN ===
             TabGroup group = tabToGroup.get(tab);
             if (group != null) {
-                group.removeTab(tab);
+                group.tabs.remove(tab);                    // xóa khỏi group
+                tabToGroup.remove(tab);
+                tab.setStyle(null);                         // reset màu
+                if (group.tabs.isEmpty()) {
+                    headerToGroup.remove(group.headerTab);
+                    tabGroups.remove(group);
+                }
+                updateHeaderGraphicIfNeeded(group);         // helper nhỏ dưới đây
             } else {
-                looseTabs.remove(tab);
+                looseTabs.remove(tab);                      // xóa khỏi loose
             }
 
+            // Xóa toàn bộ dữ liệu liên quan
             history.remove(tab);
             historyIndex.remove(tab);
+            historyIndex.remove(tab);
+            tabToGroup.remove(tab);
 
             rebuildTabOrder();
-            e.consume(); // quan trọng: ngăn JavaFX tự remove tab (tránh double remove)
+            e.consume(); // ngăn JavaFX tự remove
         });
     }
 
@@ -1130,19 +1139,29 @@ public class WebBrowserTcpController implements Initializable {
 
         TabGroup group = tabToGroup.get(tab);
         if (group != null) {
-            group.removeTab(tab);
+            group.tabs.remove(tab);
+            tabToGroup.remove(tab);
+            tab.setStyle(null);
+            group.updateHeaderGraphic(); // giữ nguyên tên + số lượng
+
             if (group.tabs.isEmpty()) {
-                tabPane.getTabs().remove(group.headerTab);
-                tabGroups.remove(group);
                 headerToGroup.remove(group.headerTab);
+                tabGroups.remove(group);
             }
         } else {
             looseTabs.remove(tab);
         }
 
-        tabPane.getTabs().remove(tabPane.getTabs().indexOf(tab));
         history.remove(tab);
         historyIndex.remove(tab);
         tabToGroup.remove(tab);
+
+        rebuildTabOrder();
+    }
+
+    private void updateHeaderGraphicIfNeeded(TabGroup group) {
+        if (group != null && group.headerTab != null) {
+            group.updateHeaderGraphic();
+        }
     }
 }
