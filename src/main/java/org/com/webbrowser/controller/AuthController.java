@@ -11,6 +11,7 @@ import javafx.stage.Stage;
 import org.com.webbrowser.WebBrowserApplication;
 import org.com.webbrowser.model.User;
 import org.com.webbrowser.model.ApiResponse;
+import org.com.webbrowser.service.AuthService;
 import org.com.webbrowser.service.UserStorageService;
 import org.com.webbrowser.session.UserSession;
 import org.com.webbrowser.utils.EncryptionUtils;
@@ -53,6 +54,8 @@ public class AuthController {
 
     private final String API_BASE = "http://localhost:8080/api/users";
     private boolean isRegisterMode = false;
+
+    private final AuthService authService = new AuthService();
 
     @FXML
     private void initialize() {
@@ -137,16 +140,18 @@ public class AuthController {
         try {
             // Giải mã
             String realPassword = EncryptionUtils.decrypt(user.getPassword());
-            ApiResponse<User> response = sendRequest(API_BASE + "/login", user.getUsername(), realPassword);
 
-            if (response != null && response.getCode() == 1000 && response.getResult() != null) {
-                // Lưu vào một session, data lưu vào là data từ server trả về
-                UserSession.getInstance().setUser(response.getResult());
-                Toast.show((Stage) userList.getScene().getWindow(), "Đăng nhập thành công!", 1500, true);
-                openBrowser();
-            } else {
-                Toast.show((Stage) userList.getScene().getWindow(), "Sai tài khoản hoặc mật khẩu!", 1500, false);
-            }
+            authService.login(
+                    user.getUsername(),
+                    realPassword,
+                    userFromServer -> {
+                        // Đăng nhập thành công → lưu session vào trình duyệt
+                        UserSession.getInstance().setUser(userFromServer);
+                        Toast.show((Stage) userList.getScene().getWindow(), "Đăng nhập thành công!", 1500, true);
+                        openBrowser();
+                    },
+                    () -> Toast.show((Stage) userList.getScene().getWindow(), "Sai mật khẩu hoặc tài khoản không tồn tại!", 1500, false)
+            );
         } catch (Exception e) {
             Toast.show((Stage) userList.getScene().getWindow(), "Lỗi kết nối server!", 1500, false);
         }
@@ -219,42 +224,39 @@ public class AuthController {
      * Hàm gọi API đăng nhập với data được nhập từ form, không phải data được load ra từ file
      */
     private void loginUser(String username, String password) {
-        try {
-            ApiResponse<User> response = sendRequest(API_BASE + "/login", username, password);
-            if (response != null && response.getCode() == 1000 && response.getResult() != null) {
-                User user = response.getResult();
-                user.setPassword(EncryptionUtils.encrypt(password));
-                UserStorageService.saveUser(user); // Lưu user vào file local để sử dụng chức năng đăng nhập nhanh
+        authService.login(
+                username,
+                password,
+                user -> {
+                    // Lưu local để lần sau đăng nhập nhanh
+                    user.setPassword(EncryptionUtils.encrypt(password));
+                    UserStorageService.saveUser(user); // Lưu user vào file local để sử dụng chức năng đăng nhập nhanh
 
-                UserSession.getInstance().setUser(user); // Lưu user vào session
-                openBrowser();
-            } else {
-                messageLabel.setText("Sai tài khoản hoặc mật khẩu!");
-            }
-        } catch (Exception e) {
-            messageLabel.setText("Không thể kết nối đến máy chủ!");
-        }
+                    UserSession.getInstance().setUser(user); // Lưu user vào session
+                    Toast.show((Stage) formPane.getScene().getWindow(), "Đăng nhập thành công!", 1500, true);
+                    openBrowser();
+                },
+                () -> messageLabel.setText("Sai tài khoản hoặc mật khẩu!")
+        );
     }
 
     /**
      * Hàm gọi API đăng kí với data được nhập từ form
      */
     private void registerUser(String username, String password) {
-        try {
-            ApiResponse<User> response = sendRequest(API_BASE + "/register", username, password);
-            if (response != null && response.getCode() == 1000 && response.getResult() != null) {
-                User user = response.getResult();
-                user.setPassword(EncryptionUtils.encrypt(password));
-                UserStorageService.saveUser(user);
+        authService.register(
+                username,
+                password,
+                user -> {
+                    // Lưu local luôn
+                    user.setPassword(EncryptionUtils.encrypt(password));
+                    UserStorageService.saveUser(user);
 
-                Toast.show((Stage) formPane.getScene().getWindow(), "Đăng ký thành công!", 1500, true);
-                showUserList();
-            } else {
-                messageLabel.setText("Tên người dùng đã tồn tại hoặc lỗi khác!");
-            }
-        } catch (Exception e) {
-            messageLabel.setText("Không thể kết nối đến máy chủ!");
-        }
+                    Toast.show((Stage) formPane.getScene().getWindow(), "Đăng ký thành công!", 1500, true);
+                    showUserList();
+                },
+                () -> messageLabel.setText("Tên đăng nhập đã tồn tại!")
+        );
     }
 
     /**

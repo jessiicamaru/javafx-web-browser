@@ -1,105 +1,126 @@
 package org.com.webbrowser.service;
 
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 import javafx.application.Platform;
 import javafx.scene.control.Alert;
+import org.com.webbrowser.model.ApiResponse;
+import org.com.webbrowser.model.Bookmark;
 import org.com.webbrowser.session.UserSession;
 
-import java.io.OutputStream;
+import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.function.Consumer;
 
 public class BookmarkService {
 
-    private final String BASE_URL = "http://localhost:8080/api/bookmark/";
+    private static final String BASE_URL = "http://localhost:8080/api/bookmark/";
+    private final Gson gson = new Gson();
 
-    public void addBookmark(String title, String url, Runnable onSuccess) {
+    public void getBookmarks(Consumer<List<Bookmark>> onSuccess, Runnable onFail) {
         Integer userId = UserSession.getInstance().getUserId();
         if (userId == null) {
-            showWarning("User chưa đăng nhập — không thể thêm bookmark");
+            showWarning("Bạn chưa đăng nhập!");
+            onFail.run();
             return;
         }
 
         new Thread(() -> {
             try {
-                URL apiUrl = new URL(BASE_URL + "add-bookmark");
-                HttpURLConnection conn = (HttpURLConnection) apiUrl.openConnection();
-                conn.setRequestMethod("POST");
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setDoOutput(true);
-
-                String jsonInput = String.format(
-                        "{\"userId\": %d, \"bookmarks\": [{\"title\": \"%s\", \"url\": \"%s\"}]}",
-                        userId, escapeJson(title), escapeJson(url)
-                );
-
-                try (OutputStream os = conn.getOutputStream()) {
-                    os.write(jsonInput.getBytes("utf-8"));
-                }
+                URL url = new URL(BASE_URL + "get-bookmark?userId=" + userId);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(10000);
 
                 int code = conn.getResponseCode();
-                if (code == 200 || code == 201) {
-                    Platform.runLater(onSuccess);
-                    System.out.println("✅ Bookmark added successfully");
-                } else {
-                    System.out.println("⚠️ Lỗi khi thêm bookmark: HTTP " + code);
+                InputStream stream = code < 400 ? conn.getInputStream() : conn.getErrorStream();
+
+                if (stream == null) {
+                    Platform.runLater(onFail);
+                    return;
+                }
+
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                    ApiResponse<List<Bookmark>> response = gson.fromJson(
+                            br,
+                            new TypeToken<ApiResponse<List<Bookmark>>>(){}.getType()
+                    );
+
+                    Platform.runLater(() -> {
+                        if (response != null && response.getCode() == 1000 && response.getResult() != null) {
+                            onSuccess.accept(response.getResult());
+                        } else {
+                            onFail.run();
+                        }
+                    });
                 }
             } catch (Exception e) {
                 e.printStackTrace();
+                Platform.runLater(onFail);
             }
         }).start();
     }
 
-    public void updateBookmark(Long id, String newTitle, String newUrl, Runnable onSuccess) {
+    private void executeSimpleRequest(String method, String endpoint, String jsonBody, Runnable onSuccess, Runnable onFail) {
+        Integer userId = UserSession.getInstance().getUserId();
+        if (userId == null) {
+            showWarning("Bạn chưa đăng nhập!");
+            onFail.run();
+            return;
+        }
+
         new Thread(() -> {
+            HttpURLConnection conn = null;
             try {
-                URL apiUrl = new URL(BASE_URL + "update-bookmark/" + id);
-                HttpURLConnection conn = (HttpURLConnection) apiUrl.openConnection();
-                conn.setRequestMethod("PUT");
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setDoOutput(true);
+                URL url = new URL(BASE_URL + endpoint);
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod(method);
+                conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(10000);
 
-                String jsonInput = String.format(
-                        "{\"title\": \"%s\", \"url\": \"%s\"}",
-                        escapeJson(newTitle), escapeJson(newUrl)
-                );
-
-                try (OutputStream os = conn.getOutputStream()) {
-                    os.write(jsonInput.getBytes("utf-8"));
+                if (jsonBody != null) {
+                    conn.setDoOutput(true);
+                    try (OutputStream os = conn.getOutputStream()) {
+                        os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
+                    }
                 }
 
                 int code = conn.getResponseCode();
-                if (code == 200) {
-                    Platform.runLater(onSuccess);
-                    System.out.println("✅ Bookmark updated successfully (ID: " + id + ")");
-                } else {
-                    System.out.println("⚠️ Lỗi khi cập nhật bookmark: HTTP " + code);
-                }
+                boolean success = code >= 200 && code < 300;
+
+                Platform.runLater(success ? onSuccess : onFail);
 
             } catch (Exception e) {
                 e.printStackTrace();
+                Platform.runLater(onFail);
+            } finally {
+                if (conn != null) conn.disconnect();
             }
         }).start();
     }
 
-    public void deleteBookmark(Long id, Runnable onSuccess) {
-        new Thread(() -> {
-            try {
-                URL apiUrl = new URL(BASE_URL + "delete-bookmark/" + id);
-                HttpURLConnection conn = (HttpURLConnection) apiUrl.openConnection();
-                conn.setRequestMethod("DELETE");
+    public void addBookmark(String title, String url, Runnable onSuccess, Runnable onFail) {
+        String json = String.format(
+                "{\"userId\": %d, \"bookmarks\": [{\"title\": \"%s\", \"url\": \"%s\"}]}",
+                getUserId(), escapeJson(title), escapeJson(url)
+        );
+        executeSimpleRequest("POST", "add-bookmark", json, onSuccess, onFail);
+    }
 
-                int code = conn.getResponseCode();
-                if (code == 200) {
-                    Platform.runLater(onSuccess);
-                    System.out.println("🗑️ Bookmark deleted successfully (ID: " + id + ")");
-                } else {
-                    System.out.println("⚠️ Lỗi khi xóa bookmark: HTTP " + code);
-                }
+    public void updateBookmark(Long id, String newTitle, String newUrl, Runnable onSuccess, Runnable onFail) {
+        String json = String.format("{\"title\": \"%s\", \"url\": \"%s\"}",
+                escapeJson(newTitle), escapeJson(newUrl));
 
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }).start();
+        executeSimpleRequest("PUT", "update-bookmark/" + id, json, onSuccess, onFail);
+    }
+
+    public void deleteBookmark(Long id, Runnable onSuccess, Runnable onFail) {
+        executeSimpleRequest("DELETE", "delete-bookmark/" + id, null, onSuccess, onFail);
     }
 
     private void showWarning(String message) {
@@ -112,8 +133,11 @@ public class BookmarkService {
         });
     }
 
-    private String escapeJson(String input) {
-        if (input == null) return "";
-        return input.replace("\"", "\\\"");
+    private String escapeJson(String s) {
+        return s == null ? "" : s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private Integer getUserId() {
+        return UserSession.getInstance().getUserId();
     }
 }

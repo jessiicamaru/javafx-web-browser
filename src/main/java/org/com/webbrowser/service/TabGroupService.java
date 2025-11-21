@@ -1,162 +1,220 @@
 package org.com.webbrowser.service;
 
 import com.google.gson.Gson;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
 import com.google.gson.reflect.TypeToken;
 import javafx.application.Platform;
 import javafx.scene.control.Alert;
+import org.com.webbrowser.model.ApiResponse;
 import org.com.webbrowser.model.ServerTabGroup;
 import org.com.webbrowser.model.SimpleGroupRequest;
 import org.com.webbrowser.session.UserSession;
 
 import java.io.*;
-import java.lang.reflect.Type;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 
 public class TabGroupService {
-    private final String BASE_URL = "http://localhost:8080/api/tabgroup/";
+
+    private static final String BASE_URL = "http://localhost:8080/api/tabgroup/";
     private final Gson gson = new Gson();
 
-    // Lấy tất cả tab group của user
-    public void getTabGroups(Consumer<List<ServerTabGroup>> callback) {
+    public void getTabGroups(Consumer<List<ServerTabGroup>> onSuccess, Runnable onFail) {
         Integer userId = UserSession.getInstance().getUserId();
         if (userId == null) {
-            Platform.runLater(() -> callback.accept(new ArrayList<>()));
+            showWarning("Bạn chưa đăng nhập!");
+            onFail.run();
             return;
         }
 
         new Thread(() -> {
+            HttpURLConnection conn = null;
             try {
                 URL url = new URL(BASE_URL + "get-tabgroup?userId=" + userId);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn = (HttpURLConnection) url.openConnection();
                 conn.setRequestMethod("GET");
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(10000);
 
-                if (conn.getResponseCode() == 200) {
-                    BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-                    JsonObject root = gson.fromJson(br, JsonObject.class);
-                    JsonArray result = root.getAsJsonArray("result");
+                int code = conn.getResponseCode();
+                InputStream stream = code < 400 ? conn.getInputStream() : conn.getErrorStream();
 
-                    Type listType = new TypeToken<List<ServerTabGroup>>(){}.getType();
-                    List<ServerTabGroup> groups = gson.fromJson(result, listType);
-                    System.out.println("Loaded " + groups.size() + " tab groups from server");
-                    Platform.runLater(() -> callback.accept(groups));
-                } else {
-                    Platform.runLater(() -> callback.accept(new ArrayList<>()));
+                if (stream == null) {
+                    Platform.runLater(onFail);
+                    return;
+                }
+
+                try (InputStreamReader isr = new InputStreamReader(stream, StandardCharsets.UTF_8);
+                     BufferedReader reader = new BufferedReader(isr)) {  // BỌC LẠI ĐÚNG!
+
+                    ApiResponse<List<ServerTabGroup>> response = gson.fromJson(
+                            reader,
+                            new TypeToken<ApiResponse<List<ServerTabGroup>>>(){}.getType()
+                    );
+
+                    Platform.runLater(() -> {
+                        if (response != null && response.getCode() == 1000 && response.getResult() != null) {
+                            System.out.println("Loaded " + response.getResult().size() + " tab groups from server");
+                            onSuccess.accept(response.getResult());
+                        } else {
+                            onFail.run();
+                        }
+                    });
                 }
             } catch (Exception e) {
                 e.printStackTrace();
-                Platform.runLater(() -> callback.accept(new ArrayList<>()));
+                Platform.runLater(onFail);
+            } finally {
+                if (conn != null) conn.disconnect();
             }
         }).start();
     }
 
-    // SỬA CHÍNH TẠI ĐÂY: TRẢ VỀ ServerTabGroup CÓ ID MỚI!
-    public void addTabGroup(ServerTabGroup group, Consumer<ServerTabGroup> onSuccess) {
+    public void addTabGroup(ServerTabGroup group, Consumer<ServerTabGroup> onSuccess, Runnable onFail) {
         Integer userId = UserSession.getInstance().getUserId();
         if (userId == null) {
-            Platform.runLater(() -> onSuccess.accept(null));
+            showWarning("Bạn chưa đăng nhập!");
+            onFail.run();
+            return;
+        }
+
+        String jsonBody = """
+        {
+          "userId": %d,
+          "tabGroups": [%s]
+        }
+        """.formatted(userId, gson.toJson(group));
+
+        executeRequestWithResult(
+                "POST",
+                "add-tabgroup",
+                jsonBody,
+                new TypeToken<ApiResponse<List<ServerTabGroup>>>(){}, // Server trả về List<ServerTabGroup>
+                resultList -> {
+                    if (!resultList.isEmpty()) {
+                        onSuccess.accept(resultList.get(0)); // Lấy group đầu tiên
+                    } else {
+                        onFail.run();
+                    }
+                },
+                onFail
+        );
+    }
+
+    private void executeSimpleRequest(String method, String endpoint, String jsonBody, Runnable onSuccess, Runnable onFail) {
+        Integer userId = UserSession.getInstance().getUserId();
+        if (userId == null) {
+            showWarning("Bạn chưa đăng nhập!");
+            onFail.run();
             return;
         }
 
         new Thread(() -> {
+            HttpURLConnection conn = null;
             try {
-                URL url = new URL(BASE_URL + "add-tabgroup");
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setRequestMethod("POST");
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setDoOutput(true);
+                URL url = new URL(BASE_URL + endpoint);
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod(method);
+                conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(10000);
 
-                String json = """
-                {
-                  "userId": %d,
-                  "tabGroups": [%s]
-                }
-                """.formatted(userId, gson.toJson(group));
-
-                try (OutputStream os = conn.getOutputStream()) {
-                    os.write(json.getBytes(StandardCharsets.UTF_8));
-                }
-
-                if (conn.getResponseCode() == 200) {
-                    BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-                    JsonObject root = gson.fromJson(br, JsonObject.class);
-                    JsonArray resultArray = root.getAsJsonArray("result"); // ← ĐÚNG: là mảng!
-
-                    if (resultArray != null && resultArray.size() > 0) {
-                        JsonObject firstGroup = resultArray.get(0).getAsJsonObject();
-                        ServerTabGroup createdGroup = gson.fromJson(firstGroup, ServerTabGroup.class);
-                        System.out.println("Group created successfully! ID: " + createdGroup.getId());
-                        Platform.runLater(() -> onSuccess.accept(createdGroup));
-                    } else {
-                        System.err.println("Server trả về result rỗng!");
-                        Platform.runLater(() -> onSuccess.accept(null));
+                if (jsonBody != null) {
+                    conn.setDoOutput(true);
+                    try (OutputStream os = conn.getOutputStream()) {
+                        os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
                     }
-                } else {
-                    System.err.println("Add group failed: HTTP " + conn.getResponseCode());
-                    Platform.runLater(() -> onSuccess.accept(null));
                 }
+
+                int code = conn.getResponseCode();
+                Platform.runLater(code >= 200 && code < 300 ? onSuccess : onFail);
+
             } catch (Exception e) {
                 e.printStackTrace();
-                Platform.runLater(() -> onSuccess.accept(null));
+                Platform.runLater(onFail);
+            } finally {
+                if (conn != null) conn.disconnect();
             }
         }).start();
     }
 
-    // Cập nhật group (name, color, toàn bộ tabs)
-    public void updateTabGroup(ServerTabGroup group, Runnable onSuccess) {
-        if (group.getId() == null) return;
+    private <T> void executeRequestWithResult(
+            String method, String endpoint, String jsonBody,
+            TypeToken<ApiResponse<T>> typeToken,
+            Consumer<T> onResult,
+            Runnable onFail) {
 
         new Thread(() -> {
+            HttpURLConnection conn = null;
             try {
-                URL url = new URL(BASE_URL + "update-tabgroup/" + group.getId());
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setRequestMethod("PUT");
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setDoOutput(true);
+                URL url = new URL(BASE_URL + endpoint);
+                conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod(method);
+                conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(10000);
 
-                String json = gson.toJson(new SimpleGroupRequest(group.getName(), group.getColor(), group.getTabs()));
-
-                try (OutputStream os = conn.getOutputStream()) {
-                    os.write(json.getBytes(StandardCharsets.UTF_8));
+                if (jsonBody != null) {
+                    conn.setDoOutput(true);
+                    try (OutputStream os = conn.getOutputStream()) {
+                        os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
+                    }
                 }
 
-                if (conn.getResponseCode() == 200) {
-                    Platform.runLater(onSuccess);
+                int code = conn.getResponseCode();
+                InputStream stream = code < 400 ? conn.getInputStream() : conn.getErrorStream();
+                if (stream == null) {
+                    Platform.runLater(onFail);
+                    return;
+                }
+
+                // SỬA TẠI ĐÂY: Dùng BufferedReader ĐÚNG CÁCH!
+                try (InputStreamReader isr = new InputStreamReader(stream, StandardCharsets.UTF_8);
+                     BufferedReader reader = new BufferedReader(isr)) {  // HOÀN HẢO!
+
+                    ApiResponse<T> response = gson.fromJson(reader, typeToken.getType());
+
+                    Platform.runLater(() -> {
+                        if (response != null && response.getCode() == 1000 && response.getResult() != null) {
+                            onResult.accept(response.getResult());
+                        } else {
+                            System.out.println("API lỗi: " + (response != null ? response.getMessage() : "No response"));
+                            onFail.run();
+                        }
+                    });
                 }
             } catch (Exception e) {
                 e.printStackTrace();
+                Platform.runLater(onFail);
+            } finally {
+                if (conn != null) conn.disconnect();
             }
         }).start();
     }
 
-    // Xóa group
-    public void deleteTabGroup(Long groupId, Runnable onSuccess) {
-        new Thread(() -> {
-            try {
-                URL url = new URL(BASE_URL + "delete-tabgroup/" + groupId);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setRequestMethod("DELETE");
+    public void updateTabGroup(ServerTabGroup group, Runnable onSuccess, Runnable onFail) {
+        if (group.getId() == null) {
+            onFail.run();
+            return;
+        }
 
-                if (conn.getResponseCode() == 200) {
-                    Platform.runLater(onSuccess);
-                }
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }).start();
+        String json = gson.toJson(new SimpleGroupRequest(group.getName(), group.getColor(), group.getTabs()));
+        executeSimpleRequest("PUT", "update-tabgroup/" + group.getId(), json, onSuccess, onFail);
     }
 
-    private void showWarning(String msg) {
+    public void deleteTabGroup(Long groupId, Runnable onSuccess, Runnable onFail) {
+        executeSimpleRequest("DELETE", "delete-tabgroup/" + groupId, null, onSuccess, onFail);
+    }
+
+    private void showWarning(String message) {
         Platform.runLater(() -> {
-            Alert a = new Alert(Alert.AlertType.WARNING);
-            a.setContentText(msg);
-            a.show();
+            Alert alert = new Alert(Alert.AlertType.WARNING);
+            alert.setTitle("Cảnh báo");
+            alert.setHeaderText(null);
+            alert.setContentText(message);
+            alert.showAndWait();
         });
     }
 }
