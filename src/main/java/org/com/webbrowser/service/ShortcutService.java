@@ -15,11 +15,21 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.function.Consumer;
 
+/**
+ * Service quản lý các Shortcut (phím tắt trang web yêu thích)
+ * Hỗ trợ: Lấy danh sách, Thêm, Sửa, Xóa shortcut
+ */
 public class ShortcutService {
 
     private static final String BASE_URL = "http://localhost:8080/api/shortcut/";
     private final Gson gson = new Gson();
 
+    /**
+     * Lấy danh sách tất cả shortcut của người dùng hiện tại
+     *
+     * @param onSuccess Callback khi thành công → trả về List<Shortcut>
+     * @param onFail    Callback khi thất bại (chưa đăng nhập, lỗi mạng, server lỗi...)
+     */
     public void getShortcuts(Consumer<List<Shortcut>> onSuccess, Runnable onFail) {
         Integer userId = UserSession.getInstance().getUserId();
         if (userId == null) {
@@ -34,11 +44,12 @@ public class ShortcutService {
                 URL url = new URL(BASE_URL + "get-shortcut?userId=" + userId);
                 conn = (HttpURLConnection) url.openConnection();
                 conn.setRequestMethod("GET");
-                conn.setRequestProperty("Accept", "application/json");
-                conn.setConnectTimeout(10000);
-                conn.setReadTimeout(10000);
+                conn.setRequestProperty("Accept", "application/json"); // Yêu cầu server trả JSON
+                conn.setConnectTimeout(10000); // Timeout kết nối 10 giây
+                conn.setReadTimeout(10000);    // Timeout đọc dữ liệu 10 giây
 
                 int code = conn.getResponseCode();
+                // Chọn stream phù hợp: thành công → InputStream, lỗi → ErrorStream
                 InputStream stream = code < 400 ? conn.getInputStream() : conn.getErrorStream();
 
                 if (stream == null) {
@@ -46,30 +57,36 @@ public class ShortcutService {
                     return;
                 }
 
+                // Đọc và parse JSON phản hồi từ server
                 try (BufferedReader br = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
                     ApiResponse<List<Shortcut>> response = gson.fromJson(
                             br,
                             new TypeToken<ApiResponse<List<Shortcut>>>(){}.getType()
                     );
 
+                    // Chạy callback trên JavaFX thread (an toàn cho UI)
                     Platform.runLater(() -> {
                         if (response != null && response.getCode() == 1000 && response.getResult() != null) {
-                            onSuccess.accept(response.getResult());
+                            onSuccess.accept(response.getResult()); // Thành công → trả danh sách shortcut
                         } else {
                             System.out.println("Lỗi API get-shortcut: " + (response != null ? response.getMessage() : "No response"));
-                            onFail.run();
+                            onFail.run(); // Lỗi nghiệp vụ từ server
                         }
                     });
                 }
             } catch (Exception e) {
                 e.printStackTrace();
-                Platform.runLater(onFail);
+                Platform.runLater(onFail); // Lỗi mạng, timeout, JSON sai định dạng...
             } finally {
-                if (conn != null) conn.disconnect();
+                if (conn != null) conn.disconnect(); // Luôn ngắt kết nối khi xong
             }
         }).start();
     }
 
+    /**
+     * Hàm chung thực hiện các request đơn giản (POST, PUT, DELETE)
+     * Dùng để thêm, sửa, xóa shortcut → tránh lặp code
+     */
     private void executeSimpleRequest(String method, String endpoint, String jsonBody, Runnable onSuccess, Runnable onFail) {
         Integer userId = UserSession.getInstance().getUserId();
         if (userId == null) {
@@ -88,16 +105,19 @@ public class ShortcutService {
                 conn.setConnectTimeout(10000);
                 conn.setReadTimeout(10000);
 
+                // Nếu có dữ liệu cần gửi (POST hoặc PUT)
                 if (jsonBody != null) {
                     conn.setDoOutput(true);
                     try (OutputStream os = conn.getOutputStream()) {
                         os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
+                        os.flush();
                     }
                 }
 
                 int code = conn.getResponseCode();
                 boolean success = code >= 200 && code < 300;
 
+                // Chạy callback tương ứng trên JavaFX thread
                 Platform.runLater(success ? onSuccess : onFail);
 
             } catch (Exception e) {
@@ -109,6 +129,10 @@ public class ShortcutService {
         }).start();
     }
 
+    /**
+     * Thêm một shortcut mới (tên + URL + màu)
+     * Format gửi lên: { "userId": 1, "shortcuts": [{"name": "...", "url": "...", "color": "#FF5733"}] }
+     */
     public void addShortcut(String name, String url, String color, Runnable onSuccess, Runnable onFail) {
         String json = String.format(
                 "{\"userId\": %d, \"shortcuts\": [{\"name\": \"%s\", \"url\": \"%s\", \"color\": \"%s\"}]}",
@@ -117,15 +141,22 @@ public class ShortcutService {
         executeSimpleRequest("POST", "add-shortcut", json, onSuccess, onFail);
     }
 
+    /**
+     * Cập nhật tên và URL của một shortcut đã tồn tại
+     */
     public void updateShortcut(Long id, String newName, String newUrl, Runnable onSuccess, Runnable onFail) {
         String json = String.format("{\"name\": \"%s\", \"url\": \"%s\"}", escapeJson(newName), escapeJson(newUrl));
         executeSimpleRequest("PUT", "update-shortcut/" + id, json, onSuccess, onFail);
     }
 
+    /**
+     * Xóa một shortcut theo ID
+     */
     public void deleteShortcut(Long id, Runnable onSuccess, Runnable onFail) {
         executeSimpleRequest("DELETE", "delete-shortcut/" + id, null, onSuccess, onFail);
     }
 
+    /** Hiển thị cảnh báo nếu người dùng chưa đăng nhập */
     private void showWarning(String message) {
         Platform.runLater(() -> {
             Alert alert = new Alert(Alert.AlertType.WARNING);
@@ -136,6 +167,7 @@ public class ShortcutService {
         });
     }
 
+    /** Thoát các ký tự đặc biệt trong JSON để tránh lỗi parse */
     private String escapeJson(String s) {
         if (s == null) return "";
         return s.replace("\\", "\\\\")
@@ -144,6 +176,7 @@ public class ShortcutService {
                 .replace("\r", "\\r");
     }
 
+    /** Lấy userId hiện tại từ Session (rút gọn) */
     private Integer getUserId() {
         return UserSession.getInstance().getUserId();
     }
