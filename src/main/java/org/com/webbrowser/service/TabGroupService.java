@@ -16,11 +16,21 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.function.Consumer;
 
+/**
+ * Service đồng bộ Nhóm Tab (Tab Group) với server
+ */
 public class TabGroupService {
 
     private static final String BASE_URL = "http://localhost:8080/api/tabgroup/";
+
     private final Gson gson = new Gson();
 
+    /**
+     * Lấy toàn bộ nhóm tab của người dùng hiện tại từ server
+     *
+     * @param onSuccess Trả về List<ServerTabGroup> khi thành công
+     * @param onFail    Gọi khi lỗi (chưa đăng nhập, mạng, server lỗi...)
+     */
     public void getTabGroups(Consumer<List<ServerTabGroup>> onSuccess, Runnable onFail) {
         Integer userId = UserSession.getInstance().getUserId();
         if (userId == null) {
@@ -40,25 +50,26 @@ public class TabGroupService {
 
                 int code = conn.getResponseCode();
                 InputStream stream = code < 400 ? conn.getInputStream() : conn.getErrorStream();
-
                 if (stream == null) {
                     Platform.runLater(onFail);
                     return;
                 }
 
+                // Đọc JSON phản hồi đúng chuẩn try-with-resources
                 try (InputStreamReader isr = new InputStreamReader(stream, StandardCharsets.UTF_8);
-                     BufferedReader reader = new BufferedReader(isr)) {  // BỌC LẠI ĐÚNG!
+                     BufferedReader reader = new BufferedReader(isr)) {
 
                     ApiResponse<List<ServerTabGroup>> response = gson.fromJson(
                             reader,
-                            new TypeToken<ApiResponse<List<ServerTabGroup>>>(){}.getType()
+                            new TypeToken<ApiResponse<List<ServerTabGroup>>>() {}.getType()
                     );
 
                     Platform.runLater(() -> {
                         if (response != null && response.getCode() == 1000 && response.getResult() != null) {
-                            System.out.println("Loaded " + response.getResult().size() + " tab groups from server");
+                            System.out.println("Đã tải thành công " + response.getResult().size() + " nhóm tab từ server");
                             onSuccess.accept(response.getResult());
                         } else {
+                            System.err.println("Lỗi tải nhóm tab: " + (response != null ? response.getMessage() : "Không có phản hồi"));
                             onFail.run();
                         }
                     });
@@ -72,6 +83,14 @@ public class TabGroupService {
         }).start();
     }
 
+    /**
+     * Thêm một nhóm tab mới lên server
+     * Server sẽ trả về danh sách nhóm (thường là 1 phần tử mới)
+     *
+     * @param group     Nhóm tạm (chưa có ID)
+     * @param onSuccess Trả về nhóm thật có ID từ server
+     * @param onFail    Lỗi khi thêm
+     */
     public void addTabGroup(ServerTabGroup group, Consumer<ServerTabGroup> onSuccess, Runnable onFail) {
         Integer userId = UserSession.getInstance().getUserId();
         if (userId == null) {
@@ -80,21 +99,22 @@ public class TabGroupService {
             return;
         }
 
+        // Backend yêu cầu format: { "userId": 1, "tabGroups": [ { ... } ] }
         String jsonBody = """
-        {
-          "userId": %d,
-          "tabGroups": [%s]
-        }
-        """.formatted(userId, gson.toJson(group));
+            {
+              "userId": %d,
+              "tabGroups": [%s]
+            }
+            """.formatted(userId, gson.toJson(group));
 
         executeRequestWithResult(
                 "POST",
                 "add-tabgroup",
                 jsonBody,
-                new TypeToken<ApiResponse<List<ServerTabGroup>>>(){}, // Server trả về List<ServerTabGroup>
+                new TypeToken<ApiResponse<List<ServerTabGroup>>>() {},
                 resultList -> {
-                    if (!resultList.isEmpty()) {
-                        onSuccess.accept(resultList.get(0)); // Lấy group đầu tiên
+                    if (resultList != null && !resultList.isEmpty()) {
+                        onSuccess.accept(resultList.get(0)); // Lấy nhóm đầu tiên (mới tạo)
                     } else {
                         onFail.run();
                     }
@@ -103,7 +123,47 @@ public class TabGroupService {
         );
     }
 
-    private void executeSimpleRequest(String method, String endpoint, String jsonBody, Runnable onSuccess, Runnable onFail) {
+    /**
+     * Cập nhật tên, màu, danh sách tab của một nhóm đã tồn tại
+     */
+    public void updateTabGroup(ServerTabGroup group, Runnable onSuccess, Runnable onFail) {
+        if (group.getId() == null) {
+            System.err.println("Không thể cập nhật nhóm tab: thiếu ID!");
+            onFail.run();
+            return;
+        }
+
+        // Chỉ gửi những field cần thiết (tối ưu payload)
+        SimpleGroupRequest request = new SimpleGroupRequest(
+                group.getName(),
+                group.getColor(),
+                group.getTabs()
+        );
+
+        String json = gson.toJson(request);
+        executeSimpleRequest("PUT", "update-tabgroup/" + group.getId(), json, onSuccess, onFail);
+    }
+
+    /**
+     * Xóa hoàn toàn một nhóm tab khỏi server
+     */
+    public void deleteTabGroup(Long groupId, Runnable onSuccess, Runnable onFail) {
+        if (groupId == null) {
+            onFail.run();
+            return;
+        }
+        executeSimpleRequest("DELETE", "delete-tabgroup/" + groupId, null, onSuccess, onFail);
+    }
+
+    // ===================================================================
+    // HÀM HỖ TRỢ (PRIVATE) – SIÊU SẠCH, KHÔNG LẶP CODE
+    // ===================================================================
+
+    /**
+     * Gửi request đơn giản (PUT, DELETE) chỉ cần biết thành công/thất bại
+     */
+    private void executeSimpleRequest(String method, String endpoint, String jsonBody,
+                                      Runnable onSuccess, Runnable onFail) {
         Integer userId = UserSession.getInstance().getUserId();
         if (userId == null) {
             showWarning("Bạn chưa đăng nhập!");
@@ -125,11 +185,12 @@ public class TabGroupService {
                     conn.setDoOutput(true);
                     try (OutputStream os = conn.getOutputStream()) {
                         os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
+                        os.flush();
                     }
                 }
 
                 int code = conn.getResponseCode();
-                Platform.runLater(code >= 200 && code < 300 ? onSuccess : onFail);
+                Platform.runLater((code >= 200 && code < 300) ? onSuccess : onFail);
 
             } catch (Exception e) {
                 e.printStackTrace();
@@ -140,6 +201,10 @@ public class TabGroupService {
         }).start();
     }
 
+    /**
+     * Gửi request và nhận kết quả phức tạp (có result trả về)
+     * Dùng cho addTabGroup (server trả về List<ServerTabGroup>)
+     */
     private <T> void executeRequestWithResult(
             String method, String endpoint, String jsonBody,
             TypeToken<ApiResponse<T>> typeToken,
@@ -160,6 +225,7 @@ public class TabGroupService {
                     conn.setDoOutput(true);
                     try (OutputStream os = conn.getOutputStream()) {
                         os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
+                        os.flush();
                     }
                 }
 
@@ -170,9 +236,8 @@ public class TabGroupService {
                     return;
                 }
 
-                // SỬA TẠI ĐÂY: Dùng BufferedReader ĐÚNG CÁCH!
                 try (InputStreamReader isr = new InputStreamReader(stream, StandardCharsets.UTF_8);
-                     BufferedReader reader = new BufferedReader(isr)) {  // HOÀN HẢO!
+                     BufferedReader reader = new BufferedReader(isr)) {
 
                     ApiResponse<T> response = gson.fromJson(reader, typeToken.getType());
 
@@ -180,7 +245,6 @@ public class TabGroupService {
                         if (response != null && response.getCode() == 1000 && response.getResult() != null) {
                             onResult.accept(response.getResult());
                         } else {
-                            System.out.println("API lỗi: " + (response != null ? response.getMessage() : "No response"));
                             onFail.run();
                         }
                     });
@@ -192,20 +256,6 @@ public class TabGroupService {
                 if (conn != null) conn.disconnect();
             }
         }).start();
-    }
-
-    public void updateTabGroup(ServerTabGroup group, Runnable onSuccess, Runnable onFail) {
-        if (group.getId() == null) {
-            onFail.run();
-            return;
-        }
-
-        String json = gson.toJson(new SimpleGroupRequest(group.getName(), group.getColor(), group.getTabs()));
-        executeSimpleRequest("PUT", "update-tabgroup/" + group.getId(), json, onSuccess, onFail);
-    }
-
-    public void deleteTabGroup(Long groupId, Runnable onSuccess, Runnable onFail) {
-        executeSimpleRequest("DELETE", "delete-tabgroup/" + groupId, null, onSuccess, onFail);
     }
 
     private void showWarning(String message) {
