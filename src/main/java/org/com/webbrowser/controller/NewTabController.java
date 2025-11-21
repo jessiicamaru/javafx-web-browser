@@ -12,21 +12,51 @@ import javafx.scene.text.Text;
 import org.com.webbrowser.model.Shortcut;
 import org.com.webbrowser.service.ShortcutService;
 import org.com.webbrowser.session.UserSession;
+import org.com.webbrowser.utils.UrlNormalizer;
+
 import java.util.List;
 import java.util.function.Consumer;
+
+/**
+ * Controller này xử lí toàn bộ giao diện và tương tác trên trang New Tab
+ * - Hiển thị ô tìm kiếm (có thể tìm bằng Google hoặc nhập URL trực tiếp)
+ * - Hiển thị danh sách các Shortcut (lối tắt) của người dùng hiện tại
+ * - Cho phép thêm, sửa, xóa shortcut thông qua menu chuột phải hoặc nút "+"
+ */
 public class NewTabController {
     @FXML
     private TextField searchField;
     @FXML
     private FlowPane shortcutContainer;
 
+    /**
+     * Callback để thông báo cho WebBrowserController mở một URL mới
+     */
     private Consumer<String> onUrlOpen;
+
+    /**
+     * Service xử lý gọi API từ server
+     */
     private final ShortcutService shortcutService = new ShortcutService();
 
+    /**
+     * Đăng ký callback khi người dùng muốn mở một URL (từ ô tìm kiếm hoặc click shortcut)
+     *
+     * Giải thích bản chất:
+     * - Bản chất việc phải đăng kí callback để thông báo cho webbrowser rằng đang mở một url mới
+     * bởi vì ta load url theo nhiều cách: history, bookmark, shortcut,... vậy nên phải có một callback
+     * làm trung gian thực hiện việc nhận diện
+     */
     public void setOnUrlOpen(Consumer<String> callback) {
         this.onUrlOpen = callback;
     }
 
+    /**
+     * Khởi tạo giao diện New Tab:
+     * - Load danh sách shortcut của user hiện tại
+     * - Xử lý sự kiện Enter trên ô tìm kiếm
+     * - Đảm bảo ô tìm kiếm có thể nhận focus khi click vào
+     */
     @FXML
     public void initialize() {
         Long userId = Long.valueOf(UserSession.getInstance().getUserId());
@@ -41,16 +71,26 @@ public class NewTabController {
         });
     }
 
+    /**
+     * Xử lý nội dung nhập trong ô tìm kiếm:
+     * - Nếu là URL hợp lệ → mở trực tiếp
+     * - Nếu không → tìm kiếm trên Google
+     */
     private void handleSearch() {
         String query = searchField.getText().trim();
         if (query.isEmpty()) return;
 
+        // Chuẩn hóa khoảng trắng và normalize URL
         query = query.replaceAll("\\s+", " ").trim().replace(" ", "+");
-        query = org.com.webbrowser.utils.UrlNormalizer.normalizeUrl(query);
+        query = UrlNormalizer.normalizeUrl(query);
         String searchUrl = "https://www.google.com/search?q=" + query;
         onUrlOpen.accept(searchUrl);
     }
 
+    /**
+     * Render lại toàn bộ danh sách shortcut ra giao diện
+     * Được gọi lại mỗi khi có thay đổi (thêm/sửa/xóa)
+     */
     private void renderShortcuts(List<Shortcut> shortcuts) {
         shortcutContainer.getChildren().clear();
 
@@ -59,12 +99,16 @@ public class NewTabController {
             shortcutContainer.getChildren().add(box);
         }
 
+        // Nút thêm mới shortcut
         Button addBtn = new Button("+");
         addBtn.getStyleClass().add("shortcut-button");
         addBtn.setOnAction(e -> openAddShortcutDialog());
         shortcutContainer.getChildren().add(addBtn);
     }
 
+    /**
+     * Tạo một nút shortcut (với avatar, tên, menu chuột phải)
+     */
     private VBox createShortcutButton(Shortcut sc) {
         VBox container = new VBox(8);
         container.setAlignment(Pos.CENTER);
@@ -75,12 +119,14 @@ public class NewTabController {
 
         VBox clickable = new VBox(avatar, nameLabel);
         clickable.setAlignment(Pos.CENTER);
+        // Click trái để mở URL
         clickable.setOnMouseClicked(e -> {
             if (e.getButton() == MouseButton.PRIMARY) {
                 onUrlOpen.accept(sc.getUrl());
             }
         });
 
+        // Menu chuột phải: Chỉnh sửa / Xóa
         ContextMenu menu = new ContextMenu();
 
         MenuItem editItem = new MenuItem("Chỉnh sửa");
@@ -100,6 +146,9 @@ public class NewTabController {
         return container;
     }
 
+    /**
+     * Mở dialog để thêm shortcut mới
+     */
     private void openAddShortcutDialog() {
         Dialog<Shortcut> dialog = new Dialog<>();
         dialog.setTitle("Thêm Shortcut");
@@ -137,6 +186,9 @@ public class NewTabController {
         });
     }
 
+    /**
+     * Tạo avatar tròn với ký tự đầu tiên của tên và màu nền pastel
+     */
     private StackPane createAvatar(String name, String colorHex) {
         char firstChar = name != null && !name.isEmpty() ? name.toUpperCase().charAt(0) : '?';
         Color color = (colorHex != null && !colorHex.isEmpty()) ? Color.web(colorHex) : randomPastelColor();
@@ -148,6 +200,9 @@ public class NewTabController {
         return new StackPane(circle, text);
     }
 
+    /**
+     * Sinh màu pastel ngẫu nhiên và trả về dưới dạng hex string (#RRGGBB)
+     */
     private String randomPastelHex() {
         Color c = randomPastelColor();
         return String.format("#%02X%02X%02X",
@@ -156,6 +211,9 @@ public class NewTabController {
                 (int) (c.getBlue() * 255));
     }
 
+    /**
+     * Sinh một màu pastel ngẫu nhiên (độ sáng cao, nhẹ nhàng)
+     */
     private Color randomPastelColor() {
         java.util.Random rand = new java.util.Random();
         double r = (rand.nextDouble() + 1) / 2;
@@ -164,6 +222,9 @@ public class NewTabController {
         return Color.color(r, g, b);
     }
 
+    /**
+     * Mở dialog chỉnh sửa shortcut hiện có
+     */
     private void openEditShortcutDialog(Shortcut sc) {
         Dialog<Shortcut> dialog = new Dialog<>();
         dialog.setTitle("Chỉnh sửa Shortcut");

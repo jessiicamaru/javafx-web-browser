@@ -17,6 +17,9 @@ import java.util.List;
 import java.util.ResourceBundle;
 import java.util.stream.Collectors;
 
+/**
+ * Controller này dùng để render ra các bản ghi lịch sử web
+ */
 public class HistoryController implements Initializable {
 
     @FXML
@@ -42,6 +45,11 @@ public class HistoryController implements Initializable {
     private BookmarkService bookmarkService;
     private java.util.function.Consumer<String> openUrlCallback;
 
+    /**
+     * Khởi tạo bảng để hiển thị lịch sử web bằng cách load từ các file ra ngoài
+     * Khởi tạo chức năng cho ca nút thêm path vào bookmark
+     * Khởi tạo chức năng xoá các bản ghi lịch sử đã chọn
+     */
     @Override
     public void initialize(URL url, ResourceBundle resourceBundle) {
         selectCol.setCellValueFactory(cellData -> cellData.getValue().selectedProperty());
@@ -67,6 +75,11 @@ public class HistoryController implements Initializable {
         deleteBtn.setOnAction(_ -> deleteSelected());
     }
 
+    /**
+     * Đóng vai trò một dạng constructor chính của controller, nhận globalHistory để render ra bảng
+     * Nhận các service cần thiết
+     * Nhận một hàm callback để thực hiện mở url khi double click vào bản ghi
+     */
     public void setData(ObservableList<HistoryEntry> globalHistory,
                         BookmarkService bookmarkService,
                         java.util.function.Consumer<String> openUrlCallback) {
@@ -76,6 +89,9 @@ public class HistoryController implements Initializable {
         historyTable.setItems(globalHistory);
     }
 
+    /**
+     * Thêm các bản ghi đã chọn thành bookmark
+     */
     private void addSelectedToBookmarks() {
         List<HistoryEntry> checked = globalHistory.stream()
                 .filter(h -> h.selectedProperty().get())
@@ -87,6 +103,9 @@ public class HistoryController implements Initializable {
         }
     }
 
+    /**
+     * Xoá các bản ghi đã chọn
+     */
     private void deleteSelected() {
         List<HistoryEntry> toDelete = globalHistory.stream()
                 .filter(h -> h.selectedProperty().get())
