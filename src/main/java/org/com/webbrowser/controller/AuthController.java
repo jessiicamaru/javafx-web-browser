@@ -1,5 +1,7 @@
 package org.com.webbrowser.controller;
 
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Scene;
@@ -14,9 +16,15 @@ import org.com.webbrowser.session.UserSession;
 import org.com.webbrowser.utils.EncryptionUtils;
 import org.com.webbrowser.utils.Toast;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.util.List;
 
+/**
+ * Controller này dùng để login hoặc register
+ */
 public class AuthController {
 
     @FXML
@@ -54,12 +62,21 @@ public class AuthController {
         submitButton.setOnAction(e -> handleFormSubmit());
     }
 
+    /**
+     * Hàm này load toàn bộ user đang có trong thư mục data/users/<username>.json
+     */
     private void loadUsers() {
 
         userList.getChildren().clear();
         List<User> users = UserStorageService.loadAllUsers();
 
+        /**
+         * Render các user ra ngoài dưới dạng thẻ
+         */
         for (User user : users) {
+            /**
+             * Tạo user card để thực hiện khi click vào thì tự động login với data có sẵn
+             */
             VBox card = createUserCard(user);
             userList.getChildren().add(card);
         }
@@ -76,6 +93,10 @@ public class AuthController {
                     -fx-cursor: hand;
                     -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.05), 3, 0, 0, 1);
                 """);
+
+        /**
+         * Thẻ dấu + dùng để thêm user nếu chưa có account
+         */
         Label plus = new Label("+");
         plus.setStyle("-fx-font-size: 36;");
         addCard.getChildren().add(plus);
@@ -106,12 +127,20 @@ public class AuthController {
         return card;
     }
 
+    /**
+     * Hàm này thực hiện giải mã từ file trong data/users/<username>.json
+     * Data trong đó được mã hoá 2 lần:
+     * - Lần 1 mã hoá mật khẩu
+     * - Lần 2 mã hoá cả mật khẩu đã mã hoá với tên đăng nhập
+     */
     private void loginWithLocalUser(User user) {
         try {
+            // Giải mã
             String realPassword = EncryptionUtils.decrypt(user.getPassword());
             ApiResponse<User> response = sendRequest(API_BASE + "/login", user.getUsername(), realPassword);
 
             if (response != null && response.getCode() == 1000 && response.getResult() != null) {
+                // Lưu vào một session, data lưu vào là data từ server trả về
                 UserSession.getInstance().setUser(response.getResult());
                 Toast.show((Stage) userList.getScene().getWindow(), "Đăng nhập thành công!", 1500, true);
                 openBrowser();
@@ -123,6 +152,9 @@ public class AuthController {
         }
     }
 
+    /**
+     * Form đăng nhập tài khoản
+     */
     private void openLoginForm() {
         isRegisterMode = false;
         formTitle.setText("Đăng nhập");
@@ -132,6 +164,9 @@ public class AuthController {
         messageLabel.setText("");
     }
 
+    /**
+     * Form đăng kí tài khoản
+     */
     private void openRegisterForm() {
         isRegisterMode = true;
         formTitle.setText("Đăng ký tài khoản");
@@ -141,6 +176,9 @@ public class AuthController {
         messageLabel.setText("");
     }
 
+    /**
+     * Thực hiện việc thay đổi UI
+     */
     private void showUserList() {
         formPane.setVisible(false);
         userListPane.setVisible(true);
@@ -151,6 +189,11 @@ public class AuthController {
         loadUsers();
     }
 
+    /**
+     * Xử lí form kể cả đăng nhập và đăng kí:
+     * - Nhận biết đăng nhập hay đăng kí dựa vào isRegisterMode
+     * - Nếu là đăng kí thì kiểm tra thêm trường confirmPassword
+     */
     private void handleFormSubmit() {
         String username = usernameField.getText().trim();
         String password = passwordField.getText().trim();
@@ -172,15 +215,18 @@ public class AuthController {
         }
     }
 
+    /**
+     * Hàm gọi API đăng nhập với data được nhập từ form, không phải data được load ra từ file
+     */
     private void loginUser(String username, String password) {
         try {
             ApiResponse<User> response = sendRequest(API_BASE + "/login", username, password);
             if (response != null && response.getCode() == 1000 && response.getResult() != null) {
                 User user = response.getResult();
                 user.setPassword(EncryptionUtils.encrypt(password));
-                UserStorageService.saveUser(user);
+                UserStorageService.saveUser(user); // Lưu user vào file local để sử dụng chức năng đăng nhập nhanh
 
-                UserSession.getInstance().setUser(user);
+                UserSession.getInstance().setUser(user); // Lưu user vào session
                 openBrowser();
             } else {
                 messageLabel.setText("Sai tài khoản hoặc mật khẩu!");
@@ -190,6 +236,9 @@ public class AuthController {
         }
     }
 
+    /**
+     * Hàm gọi API đăng kí với data được nhập từ form
+     */
     private void registerUser(String username, String password) {
         try {
             ApiResponse<User> response = sendRequest(API_BASE + "/register", username, password);
@@ -208,6 +257,10 @@ public class AuthController {
         }
     }
 
+    /**
+     * Hàm helper sendRequest nhằm tiên xử lí và hậu xử lí payload và response trả về từ server
+     * Mapping các trường cần lấy để phục vụ hàm login và register ở trên
+     */
     private ApiResponse<User> sendRequest(String apiUrl, String username, String password) throws IOException {
         java.net.URL url = new java.net.URL(apiUrl);
         java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
@@ -215,13 +268,15 @@ public class AuthController {
         conn.setRequestProperty("Content-Type", "application/json");
         conn.setDoOutput(true);
 
+        // Chuẩn bị payload để gửi
         String json = String.format("{\"username\":\"%s\", \"password\":\"%s\"}", username, password);
-        try (java.io.OutputStream os = conn.getOutputStream()) {
+        try (OutputStream os = conn.getOutputStream()) {
             os.write(json.getBytes());
         }
 
-        java.io.BufferedReader reader = new java.io.BufferedReader(
-                new java.io.InputStreamReader(
+        // Đọc response code và xử lí response rồi mapping qua gson
+        BufferedReader reader = new BufferedReader(
+                new InputStreamReader(
                         conn.getResponseCode() == 200 ? conn.getInputStream() : conn.getErrorStream()
                 )
         );
@@ -232,9 +287,9 @@ public class AuthController {
             response.append(line);
         }
 
-        com.google.gson.Gson gson = new com.google.gson.Gson();
+        Gson gson = new Gson();
         return gson.fromJson(response.toString(),
-                com.google.gson.reflect.TypeToken.getParameterized(
+                TypeToken.getParameterized(
                         org.com.webbrowser.model.ApiResponse.class,
                         org.com.webbrowser.model.User.class
                 ).getType());

@@ -3,7 +3,6 @@ package org.com.webbrowser.controller;
 import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
 import javafx.application.Platform;
-import javafx.collections.ListChangeListener;
 import javafx.concurrent.Worker;
 import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
@@ -27,12 +26,11 @@ import javafx.scene.web.WebView;
 import javafx.util.Duration;
 import org.com.webbrowser.WebBrowserApplication;
 import org.com.webbrowser.model.HistoryEntry;
-import org.com.webbrowser.model.ServerTabGroup;     // ← model từ server
+import org.com.webbrowser.model.ServerTabGroup;
 import org.com.webbrowser.model.ServerTab;
 
 import java.io.IOException;
 import java.net.URL;
-import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -42,10 +40,21 @@ import javafx.collections.ObservableList;
 import org.com.webbrowser.service.BookmarkService;
 import org.com.webbrowser.service.HistoryService;
 import org.com.webbrowser.service.TabGroupService;
-import org.com.webbrowser.utils.UrlAutoComplete;
+import org.com.webbrowser.session.UserSession;
 
+import static javafx.collections.FXCollections.observableArrayList;
 import static org.com.webbrowser.utils.UrlNormalizer.normalizeUrl;
 
+/**
+ * Controller chính của trình duyệt – điều khiển toàn bộ giao diện và chức năng của cửa sổ trình duyệt
+ * Hỗ trợ:
+ * - Nhiều tab với khả năng nhóm tab (Tab Group) đồng bộ server
+ * - Lịch sử duyệt web riêng cho từng tab + lịch sử toàn cục
+ * - Bookmark bar đồng bộ với server
+ * - Tìm kiếm trong trang (Ctrl+F), phím tắt toàn cục
+ * - Kéo thả tab để sắp xếp hoặc đưa vào nhóm
+ * - Favicon tự động, reload/stop, back/forward...
+ */
 public class WebBrowserTcpController implements Initializable {
     @FXML
     private Button backButton;
@@ -78,29 +87,55 @@ public class WebBrowserTcpController implements Initializable {
     @FXML
     private Button stopButton;
 
+    /** Cache ID bookmark để edit/delete */
     private final Map<String, Long> bookmarkIds = new HashMap<>();
+    /** Lịch sử duyệt web riêng của từng tab */
     private final Map<Tab, List<String>> history = new HashMap<>();
     private final Map<Tab, Integer> historyIndex = new HashMap<>();
-    private final ObservableList<HistoryEntry> globalHistory = FXCollections.observableArrayList();
+
+    /** Lịch sử toàn cục để hiển thị trong cửa sổ History */
+    private final ObservableList<HistoryEntry> globalHistory = observableArrayList();
+
+    /** Service xử lý bookmark */
     private final BookmarkService bookmarkService = new BookmarkService();
+
+    /** Cache favicon theo domain để tránh tải lại nhiều lần */
     private final Map<String, Image> faviconCache = new HashMap<>();
 
-    private final List<GroupHeader> tabGroups = new ArrayList<>();                    // nhóm tab (UI)
-    private final List<Tab> looseTabs = new ArrayList<>();       // tab lẻ
+    /** Danh sách các nhóm tab hiện tại */
+    private final List<GroupHeader> tabGroups = new ArrayList<>();
+
+    /** Các tab không thuộc nhóm nào */
+    private final List<Tab> looseTabs = new ArrayList<>();
+
+    /**
+     * Ánh xạ header giả → nhóm, tab → nhóm, serverId → nhóm
+     * Header là bảng tên của group, luôn nằm bên trái group
+     * Tab là các tab trong group đó
+     * ServerId là Id của group đó trong database
+     */
     private final Map<Tab, GroupHeader> headerToGroup = new HashMap<>();
     private final Map<Tab, GroupHeader> tabToGroup = new HashMap<>();
     private final Map<Long, GroupHeader> serverIdToGroup = new HashMap<>();
+
+    /** Service đồng bộ nhóm tab với server */
     private final TabGroupService tabGroupService = new TabGroupService();
 
+    /** Thứ tự tab hiện tại (chỉ chứa tab thật, không có header) – dùng để debug */
     private final List<Tab> tabOrder = new ArrayList<>();
 
+    /**
+     * Class nội bộ đại diện cho một nhóm tab (Tab Group)
+     * - Có header giả để hiển thị tên nhóm và trạng thái collapsed
+     * - Quản lý danh sách tab con, màu sắc, đồng bộ server
+     */
     private class GroupHeader {
-        String name;
-        Color color;
-        boolean collapsed = false;
-        Long serverId;
-        final List<Tab> tabs = new ArrayList<>();
-        Tab headerTab = new Tab();
+        String name; // Tên group, sẽ được hiển thị ở Header group
+        Color color; // Màu của group
+        boolean collapsed = false; // Trạng thái đóng hoặc mở rộng của group
+        Long serverId; // Id của group ở trên server
+        final List<Tab> tabs = new ArrayList<>(); // Danh sách các tab của group đó
+        Tab headerTab = new Tab(); // Header của tab dùng để hiển thị tên
 
         GroupHeader(String name, Color color, Long serverId) {
             this.name = name;
@@ -108,24 +143,24 @@ public class WebBrowserTcpController implements Initializable {
             this.serverId = serverId;
 
             headerTab = new Tab();
-            headerTab.setClosable(false);
-            headerToGroup.put(headerTab, this);
+            headerTab.setClosable(false); // Tắt nút X mặc định của tab
+            headerToGroup.put(headerTab, this); // Ánh xạ phần tên group với group
 
-            // DÙNG CÁCH NÀY ĐỂ BẮT CLICK VÀO HEADER TAB GROUP
             headerTab.graphicProperty().addListener((obs, oldGraphic, newGraphic) -> {
                 if (newGraphic instanceof Region region) {
                     region.setOnMouseClicked(e -> {
                         if (e.getButton() == MouseButton.PRIMARY && e.getClickCount() == 1) {
+                            // Thực hiện việc toggle hiển thị và thu gọn tab group
                             collapsed = !collapsed;
-                            updateHeaderGraphic();
-                            rebuildTabOrder();
+                            updateHeaderGraphic(); // Cập nhật lại giao diện
+                            rebuildTabOrder(); // Thực hiện hiển thị lại các tab trong tabpane
                             e.consume();
                         }
                     });
                 }
             });
 
-            // Đảm bảo lần đầu cũng có listener
+
             if (headerTab.getGraphic() instanceof Region region) {
                 region.setOnMouseClicked(e -> {
                     if (e.getButton() == MouseButton.PRIMARY && e.getClickCount() == 1) {
@@ -137,10 +172,14 @@ public class WebBrowserTcpController implements Initializable {
                 });
             }
 
+            // Khởi tạo context menu cho group
             setupGroupContextMenu();
             Platform.runLater(this::updateHeaderGraphic);
         }
 
+        /**
+         * Cập nhật giao diện header (tên nhóm + số tab + màu)
+         */
         void updateHeaderGraphic() {
             int r = (int) (color.getRed() * 255);
             int g = (int) (color.getGreen() * 255);
@@ -157,7 +196,7 @@ public class WebBrowserTcpController implements Initializable {
                     "-fx-background-radius: 16; " +
                     "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.3), 3, 0, 0, 1);");
 
-            // Bắt click vào badge để toggle collapse
+            // Update trạng thái của header: hiển thị các tab hoặc thu gọn
             badge.setOnMouseClicked(e -> {
                 if (e.getButton() == MouseButton.PRIMARY && e.getClickCount() == 1) {
                     collapsed = !collapsed;
@@ -167,9 +206,13 @@ public class WebBrowserTcpController implements Initializable {
                 }
             });
 
+
+            // Cập nhật lại giao diện cho header
             if (collapsed) {
+                // Khi trạng thái là đóng thì chỉ hiển thị badge
                 headerTab.setGraphic(badge);
             } else {
+                // Khi mở thì thêm một label có khoảng trống làm tab dài ra tạo cảm giác mở rộng
                 Label separator = new Label("   ");
                 separator.setStyle("-fx-background-color: transparent;");
                 HBox fullHeader = new HBox(badge, separator);
@@ -178,35 +221,54 @@ public class WebBrowserTcpController implements Initializable {
             }
         }
 
+        /**
+         * Thêm một tab thật vào nhóm này
+         */
         void addTab(Tab fxTab, ServerTab modelTab) {
+            // Kiểm tra trùng lặp tab
             if (tabs.contains(fxTab)) return;
 
+            // Xoá tab đó ở danh sách các tab đơn ở ngoài
             looseTabs.remove(fxTab);
 
+            // Thêm vào danh sách tabs của group
             tabs.add(fxTab);
+            // Thêm ánh xạ
             tabToGroup.put(fxTab, this);
 
-            // Lưu model server vào userData của tab JavaFX
+            /**
+             * Gắn dữ liệu mô hình từ server (ServerTab) vào tab JavaFX
+             * dùng để đồng bộ lên server
+             */
             fxTab.setUserData(modelTab);
 
-            // Tô màu nhóm
+            // Tô màu nền nhẹ cho tab để nhận biết nó thuộc nhóm nào
             int r = (int) (color.getRed() * 255);
             int g = (int) (color.getGreen() * 255);
             int b = (int) (color.getBlue() * 255);
             fxTab.setStyle("-fx-background-color: rgba(" + r + "," + g + "," + b + ", 0.15);");
 
+            // Thiết lập menu chuột phải cho tab (New Group, Add to Group, Remove from Group...)
             setupTabContextMenu(fxTab);
+            // Xử lý hành vi khi đóng tab (rất đặc biệt khi tab nằm trong nhóm)
             setupTabCloseHandler(fxTab);
+            // Cập nhật lại header nhóm (để hiện số lượng tab mới)
             updateHeaderGraphic();
 
+            // Nếu nhóm này chưa nằm trong danh sách nhóm toàn cục thì thêm vào
             if (!tabGroups.contains(this)) {
                 tabGroups.add(this);
             }
 
+            // Gọi API để update dữ liệu với server
             syncToServer();
         }
 
+        /**
+         * Đồng bộ thay đổi nhóm lên server (tên, màu, danh sách tab)
+         */
         private void syncToServer() {
+            // Chỉ đồng bộ nếu group đã có trên server
             if (serverId == null) return;
 
             ServerTabGroup model = new ServerTabGroup();
@@ -218,35 +280,32 @@ public class WebBrowserTcpController implements Initializable {
                     (int) (color.getBlue() * 255)));
 
             List<ServerTab> serverTabs = tabs.stream()
-                    .map(t -> (ServerTab) t.getUserData())
-                    .filter(Objects::nonNull)
+                    .map(t -> (ServerTab) t.getUserData()) // Lấy dữ liệu đã gắn trước đó
+                    .filter(Objects::nonNull) // Loại bỏ nếu có tab chưa có dữ liệu
                     .collect(Collectors.toList());
 
             model.setTabs(serverTabs);
 
+            // Gửi lên server
             tabGroupService.updateTabGroup(model, () -> {
                 System.out.println("Tab group synced: " + name + " đã được đồng bộ server");
             });
         }
 
         void removeTab(Tab tab) {
-            if (tabs.remove(tab)) {
-                tabToGroup.remove(tab);
-                tab.setStyle(null);  // reset màu
+            if (tabs.remove(tab)) {         // Nếu xoá thành công
+                tabToGroup.remove(tab);     // Bỏ ánh xạ
+                tab.setStyle(null);
 
-                // === QUAN TRỌNG NHẤT: KHÔNG ĐƯỢC XÓA KHỎI tabPane.getTabs() Ở ĐÂY NỮA ===
-                // Vì rebuildTabOrder() sẽ tự xử lý việc render lại toàn bộ → nếu xóa trước thì sẽ duplicate!
+                looseTabs.add(tab);         // Add lại tab này vào danh sách các tab đơn
 
-                looseTabs.add(tab);  // chỉ add vào looseTabs là đủ
+                updateHeaderGraphic();      // Cập nhật lại header của group
 
-                updateHeaderGraphic();
-
+                // Nếu nhóm còn 0 tab → tự động xóa nhóm luôn
                 if (tabs.isEmpty()) {
                     headerToGroup.remove(headerTab);
                     tabGroups.remove(this);
-                    // headerTab sẽ tự bị xóa trong rebuildTabOrder()
                 }
-
 
                 if (serverId != null) {
                     syncToServer();
@@ -287,27 +346,28 @@ public class WebBrowserTcpController implements Initializable {
                 }
 
                 if (serverId != null) {
-                    syncToServer(); // ← BÂY GIỜ MỚI GỌI → MÀU MỚI ĐƯỢC GỬI!
+                    syncToServer();
                 }
             });
 
             MenuItem toggle = new MenuItem(collapsed ? "Expand Group" : "Collapse Group");
             toggle.setOnAction(e -> {
                 collapsed = !collapsed;
-                updateHeaderGraphic();
-                rebuildTabOrder();
+                updateHeaderGraphic(); // Update lại header
+                rebuildTabOrder();  // Update lại các tab hiển thị
             });
 
             MenuItem ungroup = new MenuItem("Ungroup");
             ungroup.setOnAction(e -> {
-                looseTabs.addAll(tabs);
+                looseTabs.addAll(tabs); // Đưa hết tab về trạng thái lẻ
                 for (Tab t : tabs) {
                     t.setStyle(null);
                     tabToGroup.remove(t);
                 }
-                tabs.clear();
+                tabs.clear(); // Xoá sạch danh sách tabs
 
                 if (serverId != null) {
+                    // Xoá luôn ở trên server
                     tabGroupService.deleteTabGroup(serverId, () -> {
                         System.out.println("Group đã bị xóa hoàn toàn trên server (do ungroup)");
                     });
@@ -315,13 +375,13 @@ public class WebBrowserTcpController implements Initializable {
 
                 headerToGroup.remove(headerTab);
                 tabGroups.remove(this);
-                rebuildTabOrder();
+                rebuildTabOrder(); // Cập nhật lại giao diện của tab
             });
 
             MenuItem delete = new MenuItem("Delete Group (close all tabs)");
             delete.setOnAction(e -> {
                 tabs.forEach(t -> {
-                    history.remove(t);
+                    history.remove(t); // Xóa lịch sử back/forward của từng tab
                     historyIndex.remove(t);
                 });
 
@@ -332,7 +392,7 @@ public class WebBrowserTcpController implements Initializable {
                 }
 
                 tabs.clear();
-                tabPane.getTabs().remove(headerTab);
+                tabPane.getTabs().remove(headerTab); // Xóa luôn header của group
                 headerToGroup.remove(headerTab);
                 tabGroups.remove(this);
                 rebuildTabOrder();
@@ -350,234 +410,162 @@ public class WebBrowserTcpController implements Initializable {
 
     @Override
     public void initialize(URL location, ResourceBundle resources) {
+        setupUI();
+        loadDataFromServer();
+        setupEventHandlers();
+        setupGlobalShortcuts();
+    }
+
+    /**
+     * Thiết lập giao diện ban đầu
+     */
+    private void setupUI() {
         tabPane.setTabDragPolicy(TabPane.TabDragPolicy.REORDER);
         enableTabDragFinal();
 
         reloadButton.setVisible(true);
         reloadButton.setManaged(true);
-
         stopButton.setVisible(false);
         stopButton.setManaged(false);
 
+        findBar.setVisible(false);
+        findBar.setManaged(false);
+    }
+
+    /**
+     *  Tải toàn bộ dữ liệu từ server: bookmark + tab groups
+     */
+    private void loadDataFromServer() {
         loadBookmarksFromServer();
         globalHistory.setAll(HistoryService.loadAllHistory());
         loadTabGroupsFromServer();
+    }
 
-        findBar.setVisible(false);
-        findBar.setManaged(false);
-
-        goButton.setOnAction(_ -> loadUrl(getCurrentTab(), urlField.getText(), true));
-        urlField.setOnAction(_ -> loadUrl(getCurrentTab(), urlField.getText(), true));
-        addTabButton.setOnAction(_ -> addNewTab("newtab"));
-        backButton.setOnAction(_ -> goBack());
-        forwardButton.setOnAction(_ -> goForward());
-
+    /**
+     * Gán sự kiện cho các nút điều hướng, reload, bookmark...
+     */
+    private void setupEventHandlers() {
+        goButton.setOnAction(e -> loadCurrentUrl());
+        urlField.setOnAction(e -> loadCurrentUrl());
+        addTabButton.setOnAction(e -> addNewTab("newtab"));
+        backButton.setOnAction(e -> goBack());
+        forwardButton.setOnAction(e -> goForward());
         closeFindButton.setOnAction(e -> closeFindBar());
-        findField.textProperty().addListener((obs, oldText, newText) -> findInPage(newText, true));
+        findField.textProperty().addListener((obs, old, text) -> findInPage(text, true));
         nextButton.setOnAction(e -> findInPage(findField.getText(), true));
         prevButton.setOnAction(e -> findInPage(findField.getText(), false));
+        reloadButton.setOnAction(e -> reloadCurrentTab());
+        stopButton.setOnAction(e -> stopCurrentTab());
+        bookmarkButton.setOnAction(e -> addBookmark());
+    }
 
-        reloadButton.setOnAction(_ -> {
-            Tab tab = getCurrentTab();
-            if (tab != null && tab.getContent() instanceof WebView webView) {
-                webView.getEngine().reload();
-            }
-        });
-
-        stopButton.setOnAction(_ -> {
-            Tab tab = getCurrentTab();
-            if (tab != null && tab.getContent() instanceof WebView webView) {
-                webView.getEngine().getLoadWorker().cancel();
-            }
-        });
-
-        new UrlAutoComplete(urlField, globalHistory, bookmarkService, url -> loadUrl(getCurrentTab(), url, true));
-
+    /**
+     * Đăng ký các phím tắt toàn cục (Ctrl+T, Ctrl+W, Ctrl+Tab, Ctrl+F, F5, ESC...)
+     */
+    private void setupGlobalShortcuts() {
         tabPane.sceneProperty().addListener((obs, oldScene, newScene) -> {
             if (newScene != null) {
-                newScene.addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, event -> {
-                    // ✅ Xử lý Ctrl + Tab chuyển tab
-                    if (event.isControlDown() && event.getCode() == KeyCode.TAB) {
-                        int totalTabs = tabPane.getTabs().size();
-                        if (totalTabs > 1) {
-                            int currentIndex = tabPane.getSelectionModel().getSelectedIndex();
-
-                            Platform.runLater(() -> {
-                                int nextIndex;
-                                if (event.isShiftDown()) {
-                                    nextIndex = (currentIndex - 1 + totalTabs) % totalTabs;
-                                } else {
-                                    nextIndex = (currentIndex + 1) % totalTabs;
-                                }
-                                tabPane.getSelectionModel().select(nextIndex);
-                            });
-                        }
-                        event.consume();
-                    }
-                });
-
-                double[] zoomValue = {1.0};
-
-                newScene.addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, event -> {
-
-                    Tab currentTab = getCurrentTab();
-                    if (currentTab != null && currentTab.getContent() instanceof WebView webView) {
-
-                        if (event.isControlDown() && event.getCode() == KeyCode.EQUALS) {
-                            zoomValue[0] += 0.1;
-                            webView.setZoom(zoomValue[0]);
-                            event.consume();
-                        }
-
-                        if (event.isControlDown() && event.getCode() == KeyCode.MINUS) {
-                            zoomValue[0] -= 0.1;
-                            if (zoomValue[0] < 0.3) zoomValue[0] = 0.3;
-                            webView.setZoom(zoomValue[0]);
-                            event.consume();
-                        }
-
-                        if (event.isControlDown() && event.getCode() == KeyCode.DIGIT0) {
-                            zoomValue[0] = 1.0;
-                            webView.setZoom(zoomValue[0]);
-                            event.consume();
-                        }
-                    }
-                });
+                newScene.addEventFilter(KeyEvent.KEY_PRESSED, this::handleGlobalKey);
             }
-        });
-
-
-        tabPane.getSelectionModel().selectedItemProperty().addListener((obs, oldTab, newTab) -> {
-            if (newTab == null) {
-                urlField.clear();
-                return;
-            }
-
-            // Kiểm tra xem có phải là tab thật không (không phải header group)
-            if (headerToGroup.containsKey(newTab)) {
-                urlField.clear();
-                return;
-            }
-
-            Object userData = newTab.getUserData();
-
-            String url = null;
-            if (userData instanceof String) {
-                url = (String) userData;
-            } else if (userData instanceof ServerTab serverTab) {
-                url = serverTab.getUrl();
-            }
-
-            if (url != null && !url.equals(urlField.getText())) {
-                urlField.setText(url);
-                urlField.positionCaret(url.length());
-            } else if (url == null) {
-                urlField.clear();
-            }
-        });
-
-        tabPane.sceneProperty().addListener((obs, oldScene, newScene) -> {
-            if (newScene != null) {
-                newScene.addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, event -> {
-                    if (event.isControlDown() && event.getCode() == javafx.scene.input.KeyCode.H) {
-                        openHistoryWindow();
-                        event.consume();
-                    }
-
-                    if (event.isControlDown() && event.getCode() == javafx.scene.input.KeyCode.T) {
-                        addNewTab("newtab");
-                        event.consume();
-                    }
-
-                    if (event.isControlDown() && event.getCode() == javafx.scene.input.KeyCode.W) {
-                        Tab currentTab = getCurrentTab();
-                        if (currentTab != null) {
-                            closeTab(currentTab);
-                            event.consume();
-                        }
-                    }
-
-                    if (event.isControlDown() && event.getCode() == javafx.scene.input.KeyCode.E) {
-                        if (urlField != null) {
-                            Platform.runLater(() -> {
-                                urlField.requestFocus();
-                                urlField.selectAll();
-                            });
-                        }
-                        event.consume();
-                    }
-
-                    if (event.isControlDown() && event.getCode() == javafx.scene.input.KeyCode.D) {
-                        if (bookmarkButton != null) {
-                            Platform.runLater(() -> bookmarkButton.fire());
-                        }
-                        event.consume();
-                    }
-
-                    if (event.isControlDown() && event.getCode() == KeyCode.F) {
-                        openFindBar();
-                        event.consume();
-                    }
-                });
-            }
-        });
-
-        bookmarkButton.setOnAction(_ -> {
-            String currentUrl = urlField.getText();
-
-            if (currentUrl == null || currentUrl.isEmpty() || currentUrl.equals("about:blank")) {
-                Alert alert = new Alert(Alert.AlertType.WARNING);
-                alert.setTitle("Invalid URL");
-                alert.setHeaderText(null);
-                alert.setContentText("Không thể thêm bookmark vì URL trống hoặc không hợp lệ!");
-                alert.showAndWait();
-                return;
-            }
-
-            TextInputDialog dialog = new TextInputDialog("Bookmark name");
-            dialog.setTitle("Add Bookmark");
-            dialog.setHeaderText("Add new bookmark");
-            dialog.setContentText("Name:");
-
-            dialog.showAndWait().ifPresent(name -> {
-                if (name == null || name.trim().isEmpty()) {
-                    Alert alert = new Alert(Alert.AlertType.WARNING);
-                    alert.setTitle("Invalid Name");
-                    alert.setHeaderText(null);
-                    alert.setContentText("Tên bookmark không được để trống!");
-                    alert.showAndWait();
-                    return;
-                }
-
-                bookmarkService.addBookmark(name.trim(), currentUrl.trim(), this::loadBookmarksFromServer);
-            });
         });
     }
 
+    /**
+     * Xử lý phím tắt toàn cục
+     */
+    private void handleGlobalKey(KeyEvent event) {
+        if (event.getCode() == KeyCode.W && event.isControlDown()) {
+            Tab tab = getCurrentTab();
+            if (tab != null && !headerToGroup.containsKey(tab)) {
+                closeTab(tab);
+            }
+            event.consume();
+
+        } else if (event.getCode() == KeyCode.T && event.isControlDown()) {
+            addNewTab("newtab");
+            event.consume();
+
+        } else if (event.getCode() == KeyCode.TAB && event.isControlDown()) {
+            int size = tabPane.getTabs().size();
+            if (size <= 1) return;
+
+            int current = tabPane.getSelectionModel().getSelectedIndex();
+            int next = event.isShiftDown()
+                    ? (current - 1 + size) % size
+                    : (current + 1) % size;
+
+            Tab nextTab = tabPane.getTabs().get(next);
+            while (headerToGroup.containsKey(nextTab)) {
+                next = event.isShiftDown()
+                        ? (next - 1 + size) % size
+                        : (next + 1) % size;
+                nextTab = tabPane.getTabs().get(next);
+            }
+
+            tabPane.getSelectionModel().select(nextTab);
+            event.consume();
+
+        } else if (event.getCode() == KeyCode.E && event.isControlDown()) {
+            Platform.runLater(() -> {
+                urlField.requestFocus();
+                urlField.selectAll();
+            });
+            event.consume();
+
+        } else if (event.getCode() == KeyCode.F && event.isControlDown()) {
+            openFindBar();
+            event.consume();
+
+        } else if (event.getCode() == KeyCode.F5) {
+            reloadCurrentTab();
+            event.consume();
+
+        } else if (event.getCode() == KeyCode.ESCAPE) {
+            stopCurrentTab();
+            closeFindBar();
+            event.consume();
+        } else  if (event.getCode() == KeyCode.H) {
+            openHistoryWindow();
+            event.consume();
+        }
+    }
+
+    /**
+     * Đồng bộ tab hiện tại lên server nếu nó thuộc một nhóm
+     */
+    private void syncTabIfInGroup(Tab tab) {
+        if (tab == null) return;
+
+        GroupHeader group = tabToGroup.get(tab);
+        if (group != null && group.serverId != null) {
+            group.syncToServer();
+        }
+    }
+
+    /**
+     * Kiểm tra nếu không còn tab thật nào → thoát ứng dụng
+     */
     private void checkAndExitIfNoTabs() {
         long realTabCount = looseTabs.size() + tabGroups.stream().mapToLong(g -> g.tabs.size()).sum();
         if (realTabCount == 0) {
             Platform.runLater(() -> {
-                // Đợi 100ms để rebuildTabOrder hoàn tất
                 new Timeline(new KeyFrame(Duration.millis(100), e -> Platform.exit())).play();
             });
         }
     }
 
+    /**
+     * Tải danh sách nhóm tab từ serveri
+     */
     private void loadTabGroupsFromServer() {
-        Integer userId = org.com.webbrowser.session.UserSession.getInstance().getUserId();
-
-        System.out.println("=== BẮT ĐẦU LOAD TAB GROUPS ===");
-        System.out.println("User ID hiện tại: " + userId);
+        Integer userId = UserSession.getInstance().getUserId();
 
         if (userId == null) {
-            System.out.println("User chưa đăng nhập → không load tab groups");
             Platform.runLater(() -> addNewTab("newtab"));
             return;
         }
 
         tabGroupService.getTabGroups(rawList -> {
-            // ĐỢI TABPANE SẴN SÀNG + LOG SIÊU CHI TIẾT
             Platform.runLater(() -> {
                 System.out.println("\nCALLBACK từ server đã về!");
                 System.out.println("rawList = " + rawList);
@@ -606,7 +594,6 @@ public class WebBrowserTcpController implements Initializable {
                     System.out.println("rawList NULL → server trả về null hoặc lỗi");
                 }
 
-                // === TIẾP TỤC XỬ LÝ NHƯ BÌNH THƯỜNG ===
                 tabGroups.clear();
                 looseTabs.clear();
                 headerToGroup.clear();
@@ -660,12 +647,15 @@ public class WebBrowserTcpController implements Initializable {
         });
     }
 
+    /**
+     * Tạo WebView + load URL cho một tab
+     */
     private void createWebViewAndLoad(Tab tab, String url) {
         WebView webView = new WebView();
         WebEngine engine = webView.getEngine();
 
         tab.setContent(webView);
-        tab.setUserData(tab.getUserData()); // giữ model
+        tab.setUserData(tab.getUserData());
         urlField.setText(url);
 
         engine.getLoadWorker().runningProperty().addListener((obs, old, loading) -> {
@@ -688,10 +678,13 @@ public class WebBrowserTcpController implements Initializable {
         });
     }
 
+    /**
+     * Thêm một nút bookmark vào bookmark bar
+     */
     private void addBookmarkButton(String name, String url, Long id) {
         Button bmButton = new Button(name);
         bmButton.setOnAction(_ -> loadUrl(getCurrentTab(), url, true));
-        bmButton.setUserData(id); // ✅ Lưu id vào button
+        bmButton.setUserData(id);
 
         ContextMenu menu = new ContextMenu();
 
@@ -739,7 +732,9 @@ public class WebBrowserTcpController implements Initializable {
         bookmarkBar.getItems().add(bmButton);
     }
 
-
+    /**
+     * Mở tab mới – có thể là newtab page hoặc URL cụ thể
+     */
     private void addNewTab(String url) {
         Tab tab = new Tab("New Tab");
 
@@ -749,7 +744,6 @@ public class WebBrowserTcpController implements Initializable {
         history.put(tab, new ArrayList<>());
         historyIndex.put(tab, -1);
 
-        // Load nội dung (new tab page hoặc URL)
         if (url.equals("newtab")) {
             try {
                 FXMLLoader loader = new FXMLLoader(WebBrowserApplication.class.getResource("new-tab.fxml"));
@@ -794,104 +788,170 @@ public class WebBrowserTcpController implements Initializable {
         tabPane.getSelectionModel().select(tab);
     }
 
+    /**
+     * Load URL vào tab hiện tại (chuẩn hóa URL trước)
+     */
     private void loadUrl(Tab tab, String input, boolean addToHistory) {
         if (tab == null || input == null || input.isEmpty()) return;
 
-        Platform.runLater(() -> {
-            try {
-                String url = normalizeUrl(input);
+        String url = normalizeUrl(input);
+        WebView webView = createWebView(tab, url);
+        ServerTab serverTab = ensureServerTab(tab, url);
 
-                WebView webView = new WebView();
-                WebEngine engine = webView.getEngine();
+        webView.getEngine().load(url);
+        setupLoadWorkerListener(webView.getEngine(), tab, serverTab, addToHistory);
+    }
 
-                tab.setContent(webView);
-                urlField.setText(url);
+    /**
+     * Tạo WebView mới cho tab
+     */
+    private WebView createWebView(Tab tab, String url) {
+        WebView webView = new WebView();
+        tab.setContent(webView);
+        urlField.setText(url);
+        return webView;
+    }
 
-                // === PHẦN QUAN TRỌNG NHẤT: CẬP NHẬT ServerTab TRONG userData ===
-                Object currentData = tab.getUserData();
-                ServerTab serverTab;
+    /**
+     * Đảm bảo tab có đối tượng ServerTab để đồng bộ server
+     */
+    private ServerTab ensureServerTab(Tab tab, String url) {
+        Object data = tab.getUserData();
+        ServerTab serverTab;
+        if (data instanceof ServerTab st) {
+            serverTab = st;
+        } else {
+            serverTab = new ServerTab();
+            if (data instanceof String oldUrl) serverTab.setUrl(oldUrl);
+            tab.setUserData(serverTab);
+        }
+        serverTab.setUrl(url);
+        serverTab.setTitle("Loading...");
+        return serverTab;
+    }
 
-                if (currentData instanceof ServerTab st) {
-                    serverTab = st; // giữ nguyên đối tượng cũ (có ID!)
-                } else {
-                    // Nếu là tab mới (chưa có ServerTab) → tạo mới
-                    serverTab = new ServerTab();
-                    if (currentData instanceof String oldUrl) {
-                        serverTab.setUrl(oldUrl);
-                    }
-                    tab.setUserData(serverTab);
+    /**
+     * Thiết lập listener khi trang load xong: cập nhật title, favicon, lịch sử, đồng bộ server
+     */
+    private void setupLoadWorkerListener(WebEngine engine, Tab tab, ServerTab serverTab, boolean addToHistory) {
+        engine.getLoadWorker().stateProperty().addListener((obs, old, state) -> {
+            if (state == Worker.State.SUCCEEDED) {
+                String title = engine.getTitle();
+                if (title != null) {
+                    tab.setText(title.length() > 50 ? title.substring(0, 47) + "..." : title);
+                    serverTab.setTitle(title);
                 }
-
-                // CẬP NHẬT URL + TITLE MỚI NHẤT
-                serverTab.setUrl(url);
-                serverTab.setTitle("Loading...");
-
-                // === END: BÂY GIỜ syncToServer() SẼ LẤY ĐƯỢC URL MỚI NHẤT! ===
-
-                engine.getLoadWorker().runningProperty().addListener((obs, oldVal, isLoading) -> {
-                    if (isLoading) {
-                        reloadButton.setVisible(false);
-                        reloadButton.setManaged(false);
-                        stopButton.setVisible(true);
-                        stopButton.setManaged(true);
-                    } else {
-                        reloadButton.setVisible(true);
-                        reloadButton.setManaged(true);
-                        stopButton.setVisible(false);
-                        stopButton.setManaged(false);
-                    }
-                });
-
-                if (url.contains("https://www.google.com/search?q=")) {
-                    try {
-                        String query = url.substring(url.indexOf("q=") + 2);
-                        if (query.contains("&")) query = query.substring(0, query.indexOf("&"));
-                        query = java.net.URLDecoder.decode(query, "UTF-8");
-                        tab.setText(query + " - Tìm kiếm trên Google");
-                    } catch (Exception e) {
-                        tab.setText("Tìm kiếm trên Google");
-                    }
-                } else {
-                    tab.setText(url.replaceFirst("https://", "").replaceFirst("http://", ""));
-                }
-
-                engine.load(url);
-
-                engine.getLoadWorker().stateProperty().addListener((obs, oldState, newState) -> {
-                    if (newState == Worker.State.SUCCEEDED) {
-                        String title = engine.getTitle();
-                        if (title != null && !title.isEmpty()) {
-                            String displayTitle = title.length() > 50 ? title.substring(0, 47) + "..." : title;
-                            tab.setText(displayTitle);
-
-                            // CẬP NHẬT TITLE MỚI NHẤT VÀO ServerTab
-                            serverTab.setTitle(title);
-                        }
-
-                        setTabFavicon(tab, url);
-
-                        // === TỰ ĐỘNG ĐỒNG BỘ KHI LOAD XONG TRANG ===
-                        GroupHeader group = tabToGroup.get(tab);
-                        if (group != null && group.serverId != null) {
-                            group.syncToServer(); // ← ĐẢM BẢO URL + TITLE MỚI NHẤT ĐƯỢC GỬI LÊN SERVER!
-                        }
-
-                        if (globalHistory.isEmpty() || !globalHistory.get(0).getUrl().equals(url)) {
-                            String visitedAt = LocalDateTime.now().toString();
-                            globalHistory.add(0, new HistoryEntry(title != null ? title : url, url, visitedAt));
-                            HistoryService.addHistoryEntry(new HistoryEntry(title != null ? title : url, url, visitedAt));
-                            updateHistory(tab, url, addToHistory);
-                        }
-                    }
-                });
-
-            } catch (Exception e) {
-                tab.setContent(new Label("Error loading page: " + e.getMessage()));
-                e.printStackTrace();
+                setTabFavicon(tab, engine.getLocation());
+                syncTabIfInGroup(tab);
+                updateHistory(tab, engine.getLocation(), addToHistory);
             }
         });
     }
 
+    /**
+     * Load URL từ ô địa chỉ khi nhấn Enter hoặc nút Go
+     */
+    private void loadCurrentUrl() {
+        Tab currentTab = getCurrentTab();
+        if (currentTab == null || headerToGroup.containsKey(currentTab)) {
+            return;
+        }
+
+        String input = urlField.getText().trim();
+        if (input.isEmpty()) {
+            return;
+        }
+
+        loadUrl(currentTab, input, true);
+    }
+
+    /**
+     * Reload trang hiện tại
+     */
+    private void reloadCurrentTab() {
+        Tab currentTab = getCurrentTab();
+        if (currentTab == null || !(currentTab.getContent() instanceof WebView webView)) {
+            return;
+        }
+
+        webView.getEngine().reload();
+    }
+
+    /**
+     * Thêm bookmark cho trang hiện tại
+     */
+    private void addBookmark() {
+        String currentUrl = urlField.getText().trim();
+
+        if (currentUrl.isEmpty() || currentUrl.equals("about:blank") || currentUrl.startsWith("newtab")) {
+            showAlert(Alert.AlertType.WARNING, "Không thể thêm bookmark", "URL không hợp lệ hoặc trống!");
+            return;
+        }
+
+        Tab currentTab = getCurrentTab();
+        String defaultName = currentTab != null && currentTab.getText() != null
+                ? currentTab.getText() : extractTitleFromUrl(currentUrl);
+
+        TextInputDialog dialog = new TextInputDialog(defaultName);
+        dialog.setTitle("Thêm Bookmark");
+        dialog.setHeaderText("Nhập tên bookmark");
+        dialog.setContentText("Tên:");
+
+        dialog.showAndWait().ifPresent(name -> {
+            if (name == null || name.trim().isEmpty()) {
+                showAlert(Alert.AlertType.WARNING, "Lỗi", "Tên bookmark không được để trống!");
+                return;
+            }
+
+            bookmarkService.addBookmark(name.trim(), currentUrl, () -> {
+                Platform.runLater(this::loadBookmarksFromServer);
+                System.out.println("Bookmark đã được thêm: " + name);
+            });
+        });
+    }
+
+    /**
+     * Trích xuất tên mặc định từ URL nếu không có title
+     */
+    private String extractTitleFromUrl(String url) {
+        try {
+            String host = new java.net.URI(url).getHost();
+            if (host != null) {
+                host = host.replaceFirst("^www\\.", "");
+                return host.substring(0, 1).toUpperCase() + host.substring(1);
+            }
+        } catch (Exception ignored) {}
+        return "Bookmark mới";
+    }
+
+    /**
+     * Hiển thị thông báo dạng Alert
+     */
+    private void showAlert(Alert.AlertType type, String title, String message) {
+        Platform.runLater(() -> {
+            Alert alert = new Alert(type);
+            alert.setTitle(title);
+            alert.setHeaderText(null);
+            alert.setContentText(message);
+            alert.showAndWait();
+        });
+    }
+
+    /**
+     * Dừng tải trang hiện tại
+     */
+    private void stopCurrentTab() {
+        Tab currentTab = getCurrentTab();
+        if (currentTab == null || !(currentTab.getContent() instanceof WebView webView)) {
+            return;
+        }
+
+        webView.getEngine().getLoadWorker().cancel();
+    }
+
+    /**
+     * Cập nhật lịch sử duyệt web của tab
+     */
     private void updateHistory(Tab tab, String url, boolean addToHistory) {
         if (!addToHistory || tab == null) return;
 
@@ -907,6 +967,9 @@ public class WebBrowserTcpController implements Initializable {
         historyIndex.put(tab, urls.size() - 1);
     }
 
+    /**
+     * Điều hướng lùi lại trong lịch sử của tab
+     */
     private void goBack() {
         Tab tab = getCurrentTab();
         if (tab == null) return;
@@ -924,6 +987,9 @@ public class WebBrowserTcpController implements Initializable {
         }
     }
 
+    /**
+     * Điều hướng tiến lên trong lịch sử của tab
+     */
     private void goForward() {
         Tab tab = getCurrentTab();
         if (tab == null) return;
@@ -942,10 +1008,16 @@ public class WebBrowserTcpController implements Initializable {
         }
     }
 
+    /**
+     * Lấy tab hiện đang được chọn
+     */
     private Tab getCurrentTab() {
         return tabPane.getSelectionModel().getSelectedItem();
     }
 
+    /**
+     * Mở cửa sổ History riêng
+     */
     private void openHistoryWindow() {
         try {
             FXMLLoader loader = new FXMLLoader(WebBrowserApplication.class.getResource("history-view.fxml"));
@@ -970,7 +1042,9 @@ public class WebBrowserTcpController implements Initializable {
         }
     }
 
-
+    /**
+     * Tải danh sách bookmark từ server và hiển thị lên bookmark bar
+     */
     private void loadBookmarksFromServer() {
         Integer userId = org.com.webbrowser.session.UserSession.getInstance().getUserId();
         if (userId == null) {
@@ -1018,17 +1092,26 @@ public class WebBrowserTcpController implements Initializable {
         }).start();
     }
 
+    /**
+     * Mở thanh tìm kiếm trong trang (Ctrl+F)
+     */
     private void openFindBar() {
         findBar.setVisible(true);
         findBar.setManaged(true);
         findField.requestFocus();
     }
 
+    /**
+     * Đóng thanh tìm kiếm
+     */
     private void closeFindBar() {
         findBar.setVisible(false);
         findBar.setManaged(false);
     }
 
+    /**
+     * Tìm kiếm văn bản trong trang hiện tại
+     */
     private void findInPage(String query, boolean forward) {
         if (query == null || query.isEmpty()) return;
         Tab currentTab = getCurrentTab();
@@ -1053,7 +1136,9 @@ public class WebBrowserTcpController implements Initializable {
         });
     }
 
-
+    /**
+     * Tải và hiển thị favicon của trang
+     */
     private void setTabFavicon(Tab tab, String url) {
         try {
             java.net.URI uri = new java.net.URI(url);
@@ -1091,6 +1176,9 @@ public class WebBrowserTcpController implements Initializable {
         }
     }
 
+    /**
+     * Cập nhật title và favicon khi duyệt lịch sử back/forward
+     */
     private void updateTabTitleAndIcon(Tab tab, WebEngine engine, String url) {
         engine.getLoadWorker().stateProperty().addListener((obs, oldState, newState) -> {
             if (newState == Worker.State.SUCCEEDED) {
@@ -1117,9 +1205,12 @@ public class WebBrowserTcpController implements Initializable {
         });
     }
 
+    /**
+     * Bật tính năng kéo thả tab để sắp xếp hoặc đưa vào nhóm
+     * */
     private void enableTabDragFinal() {
         tabPane.setOnMouseDragged(event -> {
-            if (event.getButton() != javafx.scene.input.MouseButton.PRIMARY) return;
+            if (event.getButton() != MouseButton.PRIMARY) return;
 
             Tab draggedTab = null;
             double mouseX = event.getSceneX();
@@ -1167,7 +1258,6 @@ public class WebBrowserTcpController implements Initializable {
 
             if (draggedTab == null) return;
 
-            // Tính vị trí thả theo chuột
             double x = event.getSceneX();
             double y = event.getSceneY();
             int dropIndex = 0;
@@ -1184,7 +1274,6 @@ public class WebBrowserTcpController implements Initializable {
                 dropIndex++;
             }
 
-            // Di chuyển tab
             int finalDropIndex = dropIndex;
             Platform.runLater(() -> {
                 int oldIndex = tabPane.getTabs().indexOf(draggedTab);
@@ -1193,7 +1282,6 @@ public class WebBrowserTcpController implements Initializable {
                 int newIndex = finalDropIndex;
                 if (oldIndex < newIndex) newIndex--;
 
-                // === TÍNH TOÁN NẾU KÉO VÀO TRONG GROUP ===
                 Tab targetTab = null;
                 for (Tab t : tabPane.getTabs()) {
                     if (t == draggedTab) continue;
@@ -1208,11 +1296,9 @@ public class WebBrowserTcpController implements Initializable {
                     }
                 }
 
-// Nếu thả vào header của group → tự động add vào group đó
                 if (targetTab != null && headerToGroup.containsKey(targetTab)) {
                     GroupHeader targetGroup = headerToGroup.get(targetTab);
 
-                    // Xóa tab khỏi vị trí cũ (group cũ hoặc loose)
                     GroupHeader oldGroup = tabToGroup.get(draggedTab);
                     if (oldGroup != null) {
                         oldGroup.removeTab(draggedTab);
@@ -1221,10 +1307,8 @@ public class WebBrowserTcpController implements Initializable {
                         tabPane.getTabs().remove(draggedTab);
                     }
 
-                    // Thêm vào group mới
                     targetGroup.addTab(draggedTab, (ServerTab) draggedTab.getUserData());
 
-                    // Expand group nếu đang collapse (giống Chrome)
                     if (targetGroup.collapsed) {
                         targetGroup.collapsed = false;
                         targetGroup.updateHeaderGraphic();
@@ -1244,7 +1328,7 @@ public class WebBrowserTcpController implements Initializable {
 
                     event.setDropCompleted(true);
                     event.consume();
-                    return; // ← QUAN TRỌNG: thoát luôn, không xử lý reorder bình thường
+                    return;
                 }
 
                 if (headerToGroup.containsKey(draggedTab)) {
@@ -1268,6 +1352,9 @@ public class WebBrowserTcpController implements Initializable {
         });
     }
 
+    /**
+     * Lấy vùng header của một tab (dùng trong drag & drop)
+     */
     private Node getTabHeaderArea(Tab tab) {
         for (Node node : tabPane.lookupAll(".tab")) {
             if (node instanceof StackPane sp && sp.getUserData() == tab) {
@@ -1277,6 +1364,9 @@ public class WebBrowserTcpController implements Initializable {
         return null;
     }
 
+    /**
+     * Tái xây dựng lại thứ tự tab trong TabPane (rất quan trọng khi collapse/expand nhóm)
+     */
     private void rebuildTabOrder() {
         System.out.println("rebuildTabOrder() called | tabGroups: " + tabGroups.size() +
                 " | looseTabs: " + looseTabs.size());
@@ -1314,6 +1404,9 @@ public class WebBrowserTcpController implements Initializable {
         });
     }
 
+    /**
+     * Thiết lập menu chuột phải cho tab thường: tạo nhóm mới, thêm vào nhóm, bỏ nhóm...
+     */
     private void setupTabContextMenu(Tab tab) {
         ContextMenu cm = new ContextMenu();
 
@@ -1360,6 +1453,9 @@ public class WebBrowserTcpController implements Initializable {
         tab.setContextMenu(cm);
     }
 
+    /**
+     * Tạo nhóm tab mới từ một tab đã chọn
+     */
     private void createTabGroup(Tab tab) {
         TextInputDialog dialog = new TextInputDialog("My Group");
         dialog.setTitle("Create Tab Group");
@@ -1393,12 +1489,12 @@ public class WebBrowserTcpController implements Initializable {
 
                         GroupHeader old = tabToGroup.get(tab);
                         if (old != null) old.removeTab(tab);
-                        else looseTabs.remove(tab);  // ← QUAN TRỌNG: xóa khỏi looseTabs
+                        else looseTabs.remove(tab);
 
-                        group.addTab(tab, modelTab);  // ← addTab() giờ KHÔNG gọi rebuild nữa
+                        group.addTab(tab, modelTab);
                         serverIdToGroup.put(createdGroup.getId(), group);
 
-                        rebuildTabOrder();  // ← CHỈ GỌI 1 LẦN DUY NHẤT Ở ĐÂY!
+                        rebuildTabOrder();
                         tabPane.getSelectionModel().select(tab);
                     });
                 });
@@ -1406,6 +1502,9 @@ public class WebBrowserTcpController implements Initializable {
         });
     }
 
+    /**
+     * Xử lý đóng tab (Ctrl+W hoặc nút X) – có tính đến nhóm
+     */
     private void setupTabCloseHandler(Tab tab) {
         if (headerToGroup.containsKey(tab)) {
             tab.setClosable(false);
@@ -1413,22 +1512,20 @@ public class WebBrowserTcpController implements Initializable {
         }
 
         tab.setOnCloseRequest(e -> {
-            // === ĐÓNG THẬT – KILL TAB HOÀN TOÀN ===
             GroupHeader group = tabToGroup.get(tab);
             if (group != null) {
-                group.tabs.remove(tab);                    // xóa khỏi group
+                group.tabs.remove(tab);
                 tabToGroup.remove(tab);
-                tab.setStyle(null);                         // reset màu
+                tab.setStyle(null);
                 if (group.tabs.isEmpty()) {
                     headerToGroup.remove(group.headerTab);
                     tabGroups.remove(group);
                 }
-                updateHeaderGraphicIfNeeded(group);         // helper nhỏ dưới đây
+                updateHeaderGraphicIfNeeded(group);
             } else {
-                looseTabs.remove(tab);                      // xóa khỏi loose
+                looseTabs.remove(tab);
             }
 
-            // Xóa toàn bộ dữ liệu liên quan
             history.remove(tab);
             historyIndex.remove(tab);
             historyIndex.remove(tab);
@@ -1436,10 +1533,13 @@ public class WebBrowserTcpController implements Initializable {
 
             rebuildTabOrder();
             checkAndExitIfNoTabs();
-            e.consume(); // ngăn JavaFX tự remove
+            e.consume();
         });
     }
 
+    /**
+     * Đóng tab một cách an toàn (dùng trong phím tắt)
+     */
     private void closeTab(Tab tab) {
         if (tab == null || headerToGroup.containsKey(tab)) return;
 
@@ -1448,7 +1548,7 @@ public class WebBrowserTcpController implements Initializable {
             group.tabs.remove(tab);
             tabToGroup.remove(tab);
             tab.setStyle(null);
-            group.updateHeaderGraphic(); // giữ nguyên tên + số lượng
+            group.updateHeaderGraphic();
 
             if (group.tabs.isEmpty()) {
                 headerToGroup.remove(group.headerTab);
@@ -1466,6 +1566,9 @@ public class WebBrowserTcpController implements Initializable {
         checkAndExitIfNoTabs();
     }
 
+    /**
+     * Cập nhật lại giao diện header nếu cần sau khi xóa tab khỏi nhóm
+     */
     private void updateHeaderGraphicIfNeeded(GroupHeader group) {
         if (group != null && group.headerTab != null) {
             group.updateHeaderGraphic();
