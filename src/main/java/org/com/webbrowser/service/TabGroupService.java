@@ -6,7 +6,6 @@ import com.google.gson.JsonObject;
 import com.google.gson.reflect.TypeToken;
 import javafx.application.Platform;
 import javafx.scene.control.Alert;
-import org.com.webbrowser.model.ServerTab;
 import org.com.webbrowser.model.ServerTabGroup;
 import org.com.webbrowser.model.SimpleGroupRequest;
 import org.com.webbrowser.session.UserSession;
@@ -41,11 +40,11 @@ public class TabGroupService {
                 if (conn.getResponseCode() == 200) {
                     BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
                     JsonObject root = gson.fromJson(br, JsonObject.class);
-                    JsonArray result = root.getAsJsonArray("result"); // hoặc "result" tùy ResponseFactory của bạn
+                    JsonArray result = root.getAsJsonArray("result");
 
                     Type listType = new TypeToken<List<ServerTabGroup>>(){}.getType();
                     List<ServerTabGroup> groups = gson.fromJson(result, listType);
-                    System.out.println("Data from API:" + result);
+                    System.out.println("Loaded " + groups.size() + " tab groups from server");
                     Platform.runLater(() -> callback.accept(groups));
                 } else {
                     Platform.runLater(() -> callback.accept(new ArrayList<>()));
@@ -57,12 +56,13 @@ public class TabGroupService {
         }).start();
     }
 
-    // Thêm mới 1 group (gửi list 1 phần tử)
-    public void addTabGroup(ServerTabGroup group, Runnable onSuccess) {
+    // SỬA CHÍNH TẠI ĐÂY: TRẢ VỀ ServerTabGroup CÓ ID MỚI!
+    public void addTabGroup(ServerTabGroup group, Consumer<ServerTabGroup> onSuccess) {
         Integer userId = UserSession.getInstance().getUserId();
-        if (userId == null) return;
-
-        new Thread(onSuccess).start();
+        if (userId == null) {
+            Platform.runLater(() -> onSuccess.accept(null));
+            return;
+        }
 
         new Thread(() -> {
             try {
@@ -73,21 +73,37 @@ public class TabGroupService {
                 conn.setDoOutput(true);
 
                 String json = """
-                    {
-                      "userId": %d,
-                      "tabGroups": [%s]
-                    }
-                    """.formatted(userId, gson.toJson(group));
+                {
+                  "userId": %d,
+                  "tabGroups": [%s]
+                }
+                """.formatted(userId, gson.toJson(group));
 
                 try (OutputStream os = conn.getOutputStream()) {
                     os.write(json.getBytes(StandardCharsets.UTF_8));
                 }
 
                 if (conn.getResponseCode() == 200) {
-                    Platform.runLater(onSuccess);
+                    BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                    JsonObject root = gson.fromJson(br, JsonObject.class);
+                    JsonArray resultArray = root.getAsJsonArray("result"); // ← ĐÚNG: là mảng!
+
+                    if (resultArray != null && resultArray.size() > 0) {
+                        JsonObject firstGroup = resultArray.get(0).getAsJsonObject();
+                        ServerTabGroup createdGroup = gson.fromJson(firstGroup, ServerTabGroup.class);
+                        System.out.println("Group created successfully! ID: " + createdGroup.getId());
+                        Platform.runLater(() -> onSuccess.accept(createdGroup));
+                    } else {
+                        System.err.println("Server trả về result rỗng!");
+                        Platform.runLater(() -> onSuccess.accept(null));
+                    }
+                } else {
+                    System.err.println("Add group failed: HTTP " + conn.getResponseCode());
+                    Platform.runLater(() -> onSuccess.accept(null));
                 }
             } catch (Exception e) {
                 e.printStackTrace();
+                Platform.runLater(() -> onSuccess.accept(null));
             }
         }).start();
     }
@@ -104,7 +120,6 @@ public class TabGroupService {
                 conn.setRequestProperty("Content-Type", "application/json");
                 conn.setDoOutput(true);
 
-                // Chỉ gửi name, color, tabs → đúng DTO
                 String json = gson.toJson(new SimpleGroupRequest(group.getName(), group.getColor(), group.getTabs()));
 
                 try (OutputStream os = conn.getOutputStream()) {

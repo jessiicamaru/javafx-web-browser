@@ -109,7 +109,6 @@ public class WebBrowserTcpController implements Initializable {
 
             headerTab = new Tab();
             headerTab.setClosable(false);
-            updateHeaderGraphic();
             headerToGroup.put(headerTab, this);
 
             // DÙNG CÁCH NÀY ĐỂ BẮT CLICK VÀO HEADER TAB GROUP
@@ -139,6 +138,7 @@ public class WebBrowserTcpController implements Initializable {
             }
 
             setupGroupContextMenu();
+            Platform.runLater(this::updateHeaderGraphic);
         }
 
         void updateHeaderGraphic() {
@@ -181,6 +181,8 @@ public class WebBrowserTcpController implements Initializable {
         void addTab(Tab fxTab, ServerTab modelTab) {
             if (tabs.contains(fxTab)) return;
 
+            looseTabs.remove(fxTab);
+
             tabs.add(fxTab);
             tabToGroup.put(fxTab, this);
 
@@ -193,6 +195,7 @@ public class WebBrowserTcpController implements Initializable {
             int b = (int) (color.getBlue() * 255);
             fxTab.setStyle("-fx-background-color: rgba(" + r + "," + g + "," + b + ", 0.15);");
 
+            setupTabContextMenu(fxTab);
             setupTabCloseHandler(fxTab);
             updateHeaderGraphic();
 
@@ -200,12 +203,7 @@ public class WebBrowserTcpController implements Initializable {
                 tabGroups.add(this);
             }
 
-            rebuildTabOrder();
-
-            // Đồng bộ lên server (nếu group đã có ID)
-            if (serverId != null) {
-                syncToServer();
-            }
+            syncToServer();
         }
 
         private void syncToServer() {
@@ -249,7 +247,10 @@ public class WebBrowserTcpController implements Initializable {
                     // headerTab sẽ tự bị xóa trong rebuildTabOrder()
                 }
 
-                rebuildTabOrder(); // ← ĐÂY MỚI LÀ NƠI DUY NHẤT ĐƯỢC PHÉP THAY ĐỔI tabPane.getTabs()
+
+                if (serverId != null) {
+                    syncToServer();
+                }
             }
         }
 
@@ -265,6 +266,10 @@ public class WebBrowserTcpController implements Initializable {
                     if (!n.trim().isEmpty()) {
                         name = n.trim();
                         updateHeaderGraphic();
+
+                        if (serverId != null) {
+                            syncToServer();
+                        }
                     }
                 });
             });
@@ -272,12 +277,17 @@ public class WebBrowserTcpController implements Initializable {
             MenuItem changeColor = new MenuItem("Change Color");
             changeColor.setOnAction(e -> {
                 color = generateRandomColor();
+
                 updateHeaderGraphic();
                 for (Tab t : tabs) {
-                    int rr = (int) (color.getRed() * 255);
-                    int gg = (int) (color.getGreen() * 255);
-                    int bb = (int) (color.getBlue() * 255);
-                    t.setStyle("-fx-background-color: rgba(" + rr + "," + gg + "," + bb + ", 0.15);");
+                    int r = (int) (color.getRed() * 255);
+                    int g = (int) (color.getGreen() * 255);
+                    int b = (int) (color.getBlue() * 255);
+                    t.setStyle("-fx-background-color: rgba(" + r + "," + g + "," + b + ", 0.15);");
+                }
+
+                if (serverId != null) {
+                    syncToServer(); // ← BÂY GIỜ MỚI GỌI → MÀU MỚI ĐƯỢC GỬI!
                 }
             });
 
@@ -626,6 +636,9 @@ public class WebBrowserTcpController implements Initializable {
                             Tab fxTab = new Tab(st.getTitle() != null ? st.getTitle() : "Loading...");
                             fxTab.setUserData(st);
                             createWebViewAndLoad(fxTab, st.getUrl());
+
+                            setupTabContextMenu(fxTab);
+
                             gh.addTab(fxTab, st);
                             hasAnyTab = true;
                         }
@@ -792,20 +805,38 @@ public class WebBrowserTcpController implements Initializable {
                 WebEngine engine = webView.getEngine();
 
                 tab.setContent(webView);
-                tab.setUserData(url);
                 urlField.setText(url);
+
+                // === PHẦN QUAN TRỌNG NHẤT: CẬP NHẬT ServerTab TRONG userData ===
+                Object currentData = tab.getUserData();
+                ServerTab serverTab;
+
+                if (currentData instanceof ServerTab st) {
+                    serverTab = st; // giữ nguyên đối tượng cũ (có ID!)
+                } else {
+                    // Nếu là tab mới (chưa có ServerTab) → tạo mới
+                    serverTab = new ServerTab();
+                    if (currentData instanceof String oldUrl) {
+                        serverTab.setUrl(oldUrl);
+                    }
+                    tab.setUserData(serverTab);
+                }
+
+                // CẬP NHẬT URL + TITLE MỚI NHẤT
+                serverTab.setUrl(url);
+                serverTab.setTitle("Loading...");
+
+                // === END: BÂY GIỜ syncToServer() SẼ LẤY ĐƯỢC URL MỚI NHẤT! ===
 
                 engine.getLoadWorker().runningProperty().addListener((obs, oldVal, isLoading) -> {
                     if (isLoading) {
                         reloadButton.setVisible(false);
                         reloadButton.setManaged(false);
-
                         stopButton.setVisible(true);
                         stopButton.setManaged(true);
                     } else {
                         reloadButton.setVisible(true);
                         reloadButton.setManaged(true);
-
                         stopButton.setVisible(false);
                         stopButton.setManaged(false);
                     }
@@ -814,37 +845,49 @@ public class WebBrowserTcpController implements Initializable {
                 if (url.contains("https://www.google.com/search?q=")) {
                     try {
                         String query = url.substring(url.indexOf("q=") + 2);
-                        if (query.contains("&")) {
-                            query = query.substring(0, query.indexOf("&"));
-                        }
+                        if (query.contains("&")) query = query.substring(0, query.indexOf("&"));
                         query = java.net.URLDecoder.decode(query, "UTF-8");
-
                         tab.setText(query + " - Tìm kiếm trên Google");
                     } catch (Exception e) {
                         tab.setText("Tìm kiếm trên Google");
                     }
                 } else {
-                    tab.setText(url.replaceFirst("https://", ""));
+                    tab.setText(url.replaceFirst("https://", "").replaceFirst("http://", ""));
                 }
 
                 engine.load(url);
 
                 engine.getLoadWorker().stateProperty().addListener((obs, oldState, newState) -> {
                     if (newState == Worker.State.SUCCEEDED) {
-                        String title = engine.getTitle() != null ? engine.getTitle() : url;
-                        String visitedAt = LocalDateTime.now().toString();
+                        String title = engine.getTitle();
+                        if (title != null && !title.isEmpty()) {
+                            String displayTitle = title.length() > 50 ? title.substring(0, 47) + "..." : title;
+                            tab.setText(displayTitle);
+
+                            // CẬP NHẬT TITLE MỚI NHẤT VÀO ServerTab
+                            serverTab.setTitle(title);
+                        }
 
                         setTabFavicon(tab, url);
 
+                        // === TỰ ĐỘNG ĐỒNG BỘ KHI LOAD XONG TRANG ===
+                        GroupHeader group = tabToGroup.get(tab);
+                        if (group != null && group.serverId != null) {
+                            group.syncToServer(); // ← ĐẢM BẢO URL + TITLE MỚI NHẤT ĐƯỢC GỬI LÊN SERVER!
+                        }
+
                         if (globalHistory.isEmpty() || !globalHistory.get(0).getUrl().equals(url)) {
-                            globalHistory.add(0, new HistoryEntry(title, url, visitedAt));
-                            HistoryService.addHistoryEntry(new HistoryEntry(title, url, visitedAt));
+                            String visitedAt = LocalDateTime.now().toString();
+                            globalHistory.add(0, new HistoryEntry(title != null ? title : url, url, visitedAt));
+                            HistoryService.addHistoryEntry(new HistoryEntry(title != null ? title : url, url, visitedAt));
                             updateHistory(tab, url, addToHistory);
                         }
                     }
                 });
+
             } catch (Exception e) {
                 tab.setContent(new Label("Error loading page: " + e.getMessage()));
+                e.printStackTrace();
             }
         });
     }
@@ -1286,7 +1329,19 @@ public class WebBrowserTcpController implements Initializable {
                     GroupHeader oldGroup = tabToGroup.get(tab);
                     if (oldGroup != null) oldGroup.removeTab(tab);
                     else looseTabs.remove(tab);
-                    g.addTab(tab, (ServerTab) tab.getUserData());
+
+                    ServerTab modelTab = null;
+                    Object data = tab.getUserData();
+                    if (data instanceof ServerTab st) {
+                        modelTab = st;
+                    } else if (data instanceof String url) {
+                        modelTab = new ServerTab();
+                        modelTab.setUrl(url);
+                        modelTab.setTitle(tab.getText());
+                        tab.setUserData(modelTab);
+                    }
+
+                    g.addTab(tab, modelTab);
                     rebuildTabOrder();
                 });
                 addToMenu.getItems().add(mi);
@@ -1311,16 +1366,42 @@ public class WebBrowserTcpController implements Initializable {
         dialog.setHeaderText("Group name:");
         dialog.showAndWait().ifPresent(name -> {
             if (!name.trim().isEmpty()) {
-                GroupHeader group = new GroupHeader(name.trim(), null, null); // random color
-                // xóa khỏi vị trí cũ
-                GroupHeader old = tabToGroup.get(tab);
-                if (old != null) old.removeTab(tab);
-                else looseTabs.remove(tab);
+                ServerTabGroup tempGroup = new ServerTabGroup();
+                tempGroup.setName(name.trim());
+                tempGroup.setColor("#" + Integer.toHexString(generateRandomColor().hashCode() & 0xFFFFFF));
 
-                group.addTab(tab, null);
-                tabGroups.add(group);
-                rebuildTabOrder();
-                tabPane.getSelectionModel().select(tab);
+                ServerTab modelTab;
+                Object data = tab.getUserData();
+                if (data instanceof ServerTab st) {
+                    modelTab = st;
+                } else if (data instanceof String url) {
+                    modelTab = new ServerTab();
+                    modelTab.setUrl(url);
+                    modelTab.setTitle(tab.getText());
+                    tab.setUserData(modelTab);
+                } else {
+                    modelTab = null;
+                }
+
+                List<ServerTab> tabsList = modelTab != null ? List.of(modelTab) : List.of();
+                tempGroup.setTabs(tabsList);
+
+                tabGroupService.addTabGroup(tempGroup, createdGroup -> {
+                    Platform.runLater(() -> {
+                        GroupHeader group = new GroupHeader(createdGroup.getName(),
+                                Color.web(createdGroup.getColor()), createdGroup.getId());
+
+                        GroupHeader old = tabToGroup.get(tab);
+                        if (old != null) old.removeTab(tab);
+                        else looseTabs.remove(tab);  // ← QUAN TRỌNG: xóa khỏi looseTabs
+
+                        group.addTab(tab, modelTab);  // ← addTab() giờ KHÔNG gọi rebuild nữa
+                        serverIdToGroup.put(createdGroup.getId(), group);
+
+                        rebuildTabOrder();  // ← CHỈ GỌI 1 LẦN DUY NHẤT Ở ĐÂY!
+                        tabPane.getSelectionModel().select(tab);
+                    });
+                });
             }
         });
     }
