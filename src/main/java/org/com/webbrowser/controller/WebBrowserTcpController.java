@@ -42,6 +42,7 @@ import org.com.webbrowser.session.UserSession;
 import org.com.webbrowser.utils.ColorUtils;
 import org.com.webbrowser.utils.FaviconHelper;
 import org.com.webbrowser.utils.HistoryUtils;
+import org.com.webbrowser.utils.UrlAutoComplete;
 
 import static javafx.collections.FXCollections.observableArrayList;
 import static org.com.webbrowser.utils.UrlNormalizer.normalizeUrl;
@@ -122,6 +123,9 @@ public class WebBrowserTcpController implements Initializable {
      * Các tab không thuộc nhóm nào
      */
     private final List<Tab> looseTabs = new ArrayList<>();
+
+    /** Dùng để hiển thị suggestion mỗi khi nhập trên thanh tìm kiếm */
+    private UrlAutoComplete urlAutoComplete;
 
     /**
      * Ánh xạ header giả → nhóm, tab → nhóm, serverId → nhóm
@@ -432,6 +436,8 @@ public class WebBrowserTcpController implements Initializable {
         setupEventHandlers();
         setupGlobalShortcuts();
 
+        initializeUrlAutocomplete();
+
         tabPane.getSelectionModel().selectedItemProperty().addListener((obs, oldTab, newTab) -> {
             if (newTab == null) {
                 urlField.setText("");
@@ -466,6 +472,24 @@ public class WebBrowserTcpController implements Initializable {
                 updateNavigationButtons(newTab);
             });
         });
+    }
+
+    private void initializeUrlAutocomplete() {
+        urlAutoComplete = new UrlAutoComplete(
+                urlField,                    // TextField urlField
+                globalHistory,               // ObservableList<HistoryEntry>
+                bookmarkService,             // BookmarkService
+                this::loadUrlFromUrlField    // Consumer<String> – sẽ gọi khi người dùng chọn gợi ý hoặc nhấn Enter
+        );
+    }
+
+    // Hàm tiện ích để load URL từ thanh địa chỉ
+    private void loadUrlFromUrlField(String url) {
+        Tab currentTab = getCurrentTab();
+        if (currentTab == null || headerToGroup.containsKey(currentTab)) {
+            return;
+        }
+        loadUrl(currentTab, url, true);
     }
 
     private void updateNavigationButtons(Tab tab) {
@@ -561,8 +585,8 @@ public class WebBrowserTcpController implements Initializable {
      * Gán sự kiện cho các nút điều hướng, reload, bookmark...
      */
     private void setupEventHandlers() {
-        goButton.setOnAction(e -> loadCurrentUrl());
-        urlField.setOnAction(e -> loadCurrentUrl());
+        goButton.setOnAction(e -> loadUrlFromUrlField(urlField.getText()));
+        urlField.setOnAction(e -> loadUrlFromUrlField(urlField.getText()));
         addTabButton.setOnAction(e -> addNewTab("newtab"));
         backButton.setOnAction(e -> goBack());
         forwardButton.setOnAction(e -> goForward());
@@ -1064,7 +1088,8 @@ public class WebBrowserTcpController implements Initializable {
             return;
         }
 
-        loadUrl(currentTab, input, true);
+        String normalized = normalizeUrl(input);
+        loadUrlFromUrlField(normalized);
     }
 
     /**
