@@ -429,6 +429,106 @@ public class WebBrowserTcpController implements Initializable {
         loadDataFromServer();
         setupEventHandlers();
         setupGlobalShortcuts();
+
+        tabPane.getSelectionModel().selectedItemProperty().addListener((obs, oldTab, newTab) -> {
+            if (newTab == null) {
+                urlField.setText("");
+                backButton.setDisable(true);
+                forwardButton.setDisable(true);
+                return;
+            }
+
+            // Bỏ qua nếu là header nhóm (không có URL)
+            if (headerToGroup.containsKey(newTab)) {
+                urlField.setText("");
+                backButton.setDisable(true);
+                forwardButton.setDisable(true);
+                return;
+            }
+
+            // Kiểm tra: nếu tab này đang hiển thị trang New Tab → để trống URL
+            if (isNewTabPage(newTab)) {
+                Platform.runLater(() -> {
+                    urlField.setText("");  // Để trống hoàn toàn
+                    backButton.setDisable(true);
+                    forwardButton.setDisable(true);
+                });
+                return;
+            }
+
+            // Với tab bình thường: lấy URL hiện tại
+            String url = extractUrlFromTab(newTab);
+
+            Platform.runLater(() -> {
+                urlField.setText(url);
+                updateNavigationButtons(newTab);
+            });
+        });
+    }
+
+    private void updateNavigationButtons(Tab tab) {
+        if (tab == null || headerToGroup.containsKey(tab)) {
+            backButton.setDisable(true);
+            forwardButton.setDisable(true);
+            return;
+        }
+
+        int idx = historyIndex.getOrDefault(tab, -1);
+        List<String> hist = history.getOrDefault(tab, Collections.emptyList());
+
+        boolean canGoBack = idx > 0;
+        boolean canGoForward = idx < hist.size() - 1;
+
+        backButton.setDisable(!canGoBack);
+        forwardButton.setDisable(!canGoForward);
+    }
+
+    /**
+     * Kiểm tra xem tab hiện tại có phải là trang New Tab không
+     */
+    private boolean isNewTabPage(Tab tab) {
+        if (tab == null || tab.getContent() == null) return false;
+
+        // Cách 1: Kiểm tra nội dung có chứa searchField không (đặc trưng của new-tab.fxml)
+        try {
+            return tab.getContent().lookup("#searchField") != null;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Lấy URL hiện tại của tab (ưu tiên WebEngine → ServerTab → History)
+     */
+    private String extractUrlFromTab(Tab tab) {
+        // 1. Ưu tiên: WebEngine đang load trang thật
+        if (tab.getContent() instanceof WebView webView) {
+            String location = webView.getEngine().getLocation();
+            if (location != null && !location.isEmpty() && !location.equals("about:blank")) {
+                return location;
+            }
+        }
+
+        // 2. Nếu chưa load xong → lấy từ ServerTab (đồng bộ server)
+        Object userData = tab.getUserData();
+        if (userData instanceof ServerTab serverTab && serverTab.getUrl() != null) {
+            String url = serverTab.getUrl();
+            if (!url.isEmpty() && !url.equals("about:blank")) {
+                return url;
+            }
+        }
+
+        // 3. Cuối cùng: lấy từ lịch sử duyệt web của tab
+        List<String> hist = history.get(tab);
+        int idx = historyIndex.getOrDefault(tab, -1);
+        if (hist != null && idx >= 0 && idx < hist.size()) {
+            String url = hist.get(idx);
+            if (!url.isEmpty() && !url.equals("about:blank")) {
+                return url;
+            }
+        }
+
+        return "about:blank"; // fallback
     }
 
     /**
