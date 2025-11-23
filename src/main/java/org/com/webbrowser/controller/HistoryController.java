@@ -98,7 +98,7 @@ public class HistoryController implements Initializable {
                 .collect(Collectors.toList());
         for (HistoryEntry entry : checked) {
             String name = (entry.getTitle() != null && !entry.getTitle().isEmpty()) ? entry.getTitle() : entry.getUrl();
-            bookmarkService.addBookmark(name, entry.getUrl(), null);
+            bookmarkService.addBookmark(name, entry.getUrl(), null, null);
             entry.selectedProperty().set(false);
         }
     }
