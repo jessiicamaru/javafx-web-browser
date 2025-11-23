@@ -41,7 +41,7 @@ public class NewTabController {
 
     /**
      * Đăng ký callback khi người dùng muốn mở một URL (từ ô tìm kiếm hoặc click shortcut)
-     *
+     * <p>
      * Giải thích bản chất:
      * - Bản chất việc phải đăng kí callback để thông báo cho webbrowser rằng đang mở một url mới
      * bởi vì ta load url theo nhiều cách: history, bookmark, shortcut,... vậy nên phải có một callback
@@ -60,7 +60,9 @@ public class NewTabController {
     @FXML
     public void initialize() {
         Long userId = Long.valueOf(UserSession.getInstance().getUserId());
-        shortcutService.getShortcuts(userId, this::renderShortcuts);
+        shortcutService.getShortcuts(userId, this::renderShortcuts,
+                () -> System.out.println("Lỗi: Không tải được danh sách shortcut")
+        );
 
         searchField.setOnAction(e -> handleSearch());
 
@@ -134,8 +136,14 @@ public class NewTabController {
 
         MenuItem deleteItem = new MenuItem("Xóa");
         deleteItem.setOnAction(ev -> {
-            shortcutService.deleteShortcut(sc.getId(), () ->
-                    shortcutService.getShortcuts(Long.valueOf(UserSession.getInstance().getUserId()), this::renderShortcuts)
+            shortcutService.deleteShortcut(
+                    sc.getId(),
+                    () -> shortcutService.getShortcuts(
+                            Long.valueOf(UserSession.getInstance().getUserId()),
+                            this::renderShortcuts,
+                            () -> System.out.println("Xóa thành công nhưng reload thất bại")
+                    ),
+                    () -> System.out.println("Xóa shortcut thất bại")
             );
         });
 
@@ -180,8 +188,16 @@ public class NewTabController {
         });
 
         dialog.showAndWait().ifPresent(sc -> {
-            shortcutService.addShortcut(sc.getName(), sc.getUrl(), sc.getColor(), () ->
-                    shortcutService.getShortcuts(Long.valueOf(UserSession.getInstance().getUserId()), this::renderShortcuts)
+            shortcutService.addShortcut(
+                    sc.getName(),
+                    sc.getUrl(),
+                    sc.getColor(),
+                    () -> shortcutService.getShortcuts(
+                            Long.valueOf(UserSession.getInstance().getUserId()),
+                            this::renderShortcuts,
+                            () -> System.out.println("Thêm thành công nhưng reload thất bại")
+                    ),
+                    () -> System.out.println("Thêm shortcut thất bại")
             );
         });
     }
@@ -254,10 +270,17 @@ public class NewTabController {
         });
 
         dialog.showAndWait().ifPresent(updated -> {
-            shortcutService.updateShortcut(sc.getId(), sc.getName(), sc.getUrl(), new Thread(() -> {
-                Long userId = Long.valueOf(UserSession.getInstance().getUserId());
-                shortcutService.getShortcuts(userId, this::renderShortcuts);
-            }));
+            shortcutService.updateShortcut(
+                    sc.getId(),
+                    sc.getName(),
+                    sc.getUrl(),
+                    () -> shortcutService.getShortcuts(
+                            Long.valueOf(UserSession.getInstance().getUserId()),
+                            this::renderShortcuts,
+                            () -> System.out.println("Sửa thành công nhưng reload thất bại")
+                    ),
+                    () -> System.out.println("Sửa shortcut thất bại")
+            );
         });
     }
 

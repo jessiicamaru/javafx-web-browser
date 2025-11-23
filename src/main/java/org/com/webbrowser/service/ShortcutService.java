@@ -30,8 +30,7 @@ public class ShortcutService {
      * @param onSuccess Callback khi thành công → trả về List<Shortcut>
      * @param onFail    Callback khi thất bại (chưa đăng nhập, lỗi mạng, server lỗi...)
      */
-    public void getShortcuts(Consumer<List<Shortcut>> onSuccess, Runnable onFail) {
-        Integer userId = UserSession.getInstance().getUserId();
+    public void getShortcuts(Long userId, Consumer<List<Shortcut>> onSuccess, Runnable onFail) {
         if (userId == null) {
             showWarning("Bạn chưa đăng nhập!");
             onFail.run();
