@@ -1,5 +1,6 @@
 package org.com.webbrowser.controller;
 
+import javafx.application.Platform;
 import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
 import javafx.fxml.Initializable;
@@ -44,6 +45,7 @@ public class HistoryController implements Initializable {
     private ObservableList<HistoryEntry> globalHistory;
     private BookmarkService bookmarkService;
     private java.util.function.Consumer<String> openUrlCallback;
+    private Runnable refreshBookmarks;
 
     /**
      * Khởi tạo bảng để hiển thị lịch sử web bằng cách load từ các file ra ngoài
@@ -82,10 +84,11 @@ public class HistoryController implements Initializable {
      */
     public void setData(ObservableList<HistoryEntry> globalHistory,
                         BookmarkService bookmarkService,
-                        java.util.function.Consumer<String> openUrlCallback) {
+                        java.util.function.Consumer<String> openUrlCallback, Runnable refreshBookmarks) {
         this.globalHistory = globalHistory;
         this.bookmarkService = bookmarkService;
         this.openUrlCallback = openUrlCallback;
+        this.refreshBookmarks = refreshBookmarks;
         historyTable.setItems(globalHistory);
     }
 
@@ -98,7 +101,16 @@ public class HistoryController implements Initializable {
                 .collect(Collectors.toList());
         for (HistoryEntry entry : checked) {
             String name = (entry.getTitle() != null && !entry.getTitle().isEmpty()) ? entry.getTitle() : entry.getUrl();
-            bookmarkService.addBookmark(name, entry.getUrl(), null, null);
+            bookmarkService.addBookmark(
+                    name,
+                    entry.getUrl(),
+                    () -> {
+                        if (refreshBookmarks != null) {
+                            refreshBookmarks.run(); // Gọi lại loadBookmarksFromServer()
+                        }
+                    },
+                    () -> System.err.println("Lỗi thêm bookmark: " + name)
+            );
             entry.selectedProperty().set(false);
         }
     }
@@ -115,5 +127,6 @@ public class HistoryController implements Initializable {
 
         globalHistory.removeAll(toDelete);
         HistoryService.deleteHistoryEntries(toDelete);
+        globalHistory.setAll(HistoryService.loadAllHistory());
     }
 }
