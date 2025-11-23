@@ -185,18 +185,15 @@ public class UrlAutoComplete {
         Label label = new Label(text, new ImageView(icon));
         label.setStyle("-fx-padding: 6 10; -fx-font-size: 13px;");
         CustomMenuItem item = new CustomMenuItem(label, true);
+        item.setUserData(url);
 
         item.setOnAction(_ -> {
             suggestionsPopup.hide();
-            String selected = text;
+            String finalUrl = normalizeUrl(url);
 
-            String finalUrl;
             if (type.equals("google")) {
-                // Đây là gợi ý Google → chuyển thành URL tìm kiếm chuẩn
-                String query = selected.replace("🔍 ", "").trim();
+                String query = text.replace("🔍 ", "").trim();
                 finalUrl = "https://www.google.com/search?q=" + URLEncoder.encode(query, StandardCharsets.UTF_8);
-            } else {
-                finalUrl = normalizeUrl(url);
             }
 
             textField.setText(finalUrl);
@@ -240,22 +237,33 @@ public class UrlAutoComplete {
 
     private void navigate(int delta) {
         if (currentItems.isEmpty()) return;
+
         currentIndex = (currentIndex + delta + currentItems.size()) % currentItems.size();
 
         for (int i = 0; i < currentItems.size(); i++) {
             Label lbl = (Label) currentItems.get(i).getContent();
             String displayText = lbl.getText();
-            String cleanText = displayText.replace("⭐ ", "").replace("🔍 ", "").trim();
+
+            // Lấy text thật để hiển thị trong urlField
+            String cleanText = displayText
+                    .replace("⭐ ", "")
+                    .replace("🔍 ", "")
+                    .trim();
 
             lbl.setStyle(i == currentIndex
-                    ? "-fx-background-color: -fx-accent; -fx-text-fill: white; -fx-padding: 6 10;"
-                    : "-fx-padding: 6 10;");
+                    ? "-fx-background-color: #3399ff; -fx-text-fill: white; -fx-padding: 8 12; -fx-background-radius: 4;"
+                    : "-fx-padding: 8 12;");
 
             if (i == currentIndex) {
                 if (displayText.startsWith("🔍 ")) {
+                    // Gợi ý Google → chỉ hiện từ khóa tìm kiếm
                     textField.setText(cleanText);
                 } else {
-                    textField.setText(cleanText);
+                    // URL thật → hiện URL đầy đủ
+                    CustomMenuItem item = currentItems.get(i);
+                    String fullUrl = (String) item.getUserData(); // ta sẽ set userData ở dưới
+                    if (fullUrl == null) fullUrl = cleanText;
+                    textField.setText(fullUrl);
                 }
                 textField.positionCaret(textField.getText().length());
             }

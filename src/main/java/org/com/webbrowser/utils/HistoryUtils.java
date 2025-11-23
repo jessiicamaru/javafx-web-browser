@@ -15,8 +15,6 @@ public class HistoryUtils {
 
     /**
      * Chuẩn hóa URL Google Search để loại bỏ tham số tracking
-     * Ví dụ:
-     *   https://www.google.com/search?q=minecraft&sei=abc123 → https://www.google.com/search?q=minecraft
      */
     public static String normalizeGoogleSearchUrl(String url) {
         if (url == null || !url.contains("google.com/search")) {
