@@ -29,6 +29,7 @@ import org.com.webbrowser.model.ServerTab;
 import java.io.IOException;
 import java.net.URL;
 import java.net.URLDecoder;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -40,6 +41,7 @@ import org.com.webbrowser.service.TabGroupService;
 import org.com.webbrowser.session.UserSession;
 import org.com.webbrowser.utils.ColorUtils;
 import org.com.webbrowser.utils.FaviconHelper;
+import org.com.webbrowser.utils.HistoryUtils;
 
 import static javafx.collections.FXCollections.observableArrayList;
 import static org.com.webbrowser.utils.UrlNormalizer.normalizeUrl;
@@ -645,7 +647,7 @@ public class WebBrowserTcpController implements Initializable {
             stopCurrentTab();
             closeFindBar();
             event.consume();
-        } else if (event.getCode() == KeyCode.H) {
+        } else if (event.getCode() == KeyCode.H && event.isControlDown()) {
             // Ctrl + H để mở lịch sử web
             openHistoryWindow();
             event.consume();
@@ -982,11 +984,58 @@ public class WebBrowserTcpController implements Initializable {
     private void setupLoadWorkerListener(WebEngine engine, Tab tab, ServerTab serverTab, boolean addToHistory) {
         engine.getLoadWorker().stateProperty().addListener((obs, old, state) -> {
             if (state == Worker.State.SUCCEEDED) {
-                // Cập nhật tiêu đề tab
+                String finalUrl = engine.getLocation();
                 String title = engine.getTitle();
-                if (title != null) {
-                    tab.setText(title.length() > 50 ? title.substring(0, 47) + "..." : title);
-                    serverTab.setTitle(title);  // Để đồng bộ server sau này
+
+                // Cập nhật tiêu đề tab
+                if (title != null && !title.isEmpty()) {
+                    String displayTitle = title.length() > 50 ? title.substring(0, 47) + "..." : title;
+                    tab.setText(displayTitle);
+                    serverTab.setTitle(title);
+                }
+
+                // === CHỈ THÊM VÀO LỊCH SỬ NẾU HỢP LỆ ===
+                if (addToHistory && finalUrl != null && !finalUrl.isEmpty()
+                        && !finalUrl.equals("about:blank")
+                        && !finalUrl.contains("new-tab.fxml")
+                        && !finalUrl.startsWith("data:")
+                        && !finalUrl.startsWith("file:")
+                        && !finalUrl.contains("/sorry/index")) { // Loại bỏ captcha Google
+
+                    // Chuẩn hóa URL để loại bỏ tham số tracking (đặc biệt là Google Search)
+                    String cleanUrl = HistoryUtils.normalizeUrlForHistory(finalUrl);
+
+                    if (cleanUrl == null) {
+                        return; // Là captcha → bỏ qua hoàn toàn
+                    }
+
+                    // Tạo tiêu đề đẹp (ưu tiên title trang → URL → domain)
+                    if (title == null || title.isEmpty() || title.equals("New Tab")) {
+                        title = extractTitleFromUrl(cleanUrl);
+                    }
+
+                    // Tạo entry lịch sử mới
+                    HistoryEntry newEntry = new HistoryEntry(
+                            title,
+                            cleanUrl,
+                            LocalDateTime.now().toString()
+                    );
+
+                    // === LOẠI BỎ TRÙNG LẶP HOÀN HẢO ===
+                    Platform.runLater(() -> {
+                        // Xóa tất cả bản ghi cũ có cùng URL đã chuẩn hóa
+                        String finalCleanUrl = cleanUrl; // cho lambda
+                        globalHistory.removeIf(e -> {
+                            String normalized = HistoryUtils.normalizeUrlForHistory(e.getUrl());
+                            return normalized != null && normalized.equalsIgnoreCase(finalCleanUrl);
+                        });
+
+                        // Thêm bản ghi mới vào đầu danh sách
+                        globalHistory.add(0, newEntry);
+
+                        // Ghi vào file (HistoryService)
+                        HistoryService.addHistoryEntry(newEntry);
+                    });
                 }
 
                 // Cập nhật favicon
@@ -1194,7 +1243,7 @@ public class WebBrowserTcpController implements Initializable {
             Parent root = loader.load();
 
             HistoryController controller = loader.getController();
-            controller.setData(globalHistory, bookmarkService, url -> addNewTab(url));
+            controller.setData(globalHistory, bookmarkService, url -> addNewTab(url), this::loadBookmarksFromServer);
 
             Tab historyTab = new Tab("History");
             historyTab.setContent(root);
